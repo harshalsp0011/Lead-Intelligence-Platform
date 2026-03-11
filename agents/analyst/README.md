@@ -17,6 +17,11 @@ and formats savings for display in reports.
 Calculates score components (multisite and data quality), assigns lead tier,
 builds a human-readable score reason, and computes a 0-10 data quality signal.
 
+`enrichment_client.py`
+Finds decision-maker contacts through Hunter.io or Apollo.io based on
+`ENRICHMENT_PROVIDER`, saves unique contacts in `contacts`, and picks the best
+priority contact for outreach.
+
 `analyst_agent.py`
 Main Analyst entry point. Processes one company at a time, coordinates spend,
 savings, quality, scoring, and writes results into `company_features` and `lead_scores`.
@@ -48,3 +53,25 @@ How it is used:
 8. `analyst_agent.py` stores derived features in `company_features`.
 9. `analyst_agent.py` stores final score + tier in `lead_scores` and marks company status as `scored`.
 10. If seed data changes, call `refresh_benchmarks()` to pick up new values without restarting the process.
+
+Enrichment functions:
+
+1. `find_contacts(company_name, website_domain, db_session)`
+Loads `ENRICHMENT_PROVIDER`, calls Hunter or Apollo, resolves company ID,
+saves each contact in `contacts`, and returns saved contact dictionaries.
+
+2. `find_via_hunter(domain)`
+Calls Hunter domain-search API, filters to target titles, and returns matching
+raw contact dictionaries.
+
+3. `find_via_apollo(company_name, domain)`
+Calls Apollo people search API with domain and seniority filters, applies the
+same target-title filter, and returns matching raw contact dictionaries.
+
+4. `save_contact(contact_dict, company_id, db_session)`
+Checks for duplicate email first. If found, returns existing contact ID.
+Otherwise inserts a new row into `contacts` with provider source and returns the new ID.
+
+5. `get_priority_contact(company_id, db_session)`
+Returns the highest-priority contact using title order:
+CFO -> VP/Director Finance -> Facilities -> Operations/Energy -> other verified.
