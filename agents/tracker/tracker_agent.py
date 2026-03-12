@@ -17,15 +17,26 @@ Usage:
 """
 
 import logging
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
-from sqlalchemy import text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from agents.outreach import followup_scheduler
 from agents.tracker.status_updater import update_lead_status
 from config.settings import get_settings
+from database.orm_models import Company, EmailDraft, OutreachEvent
+
+
+def _parse_uuid(value: str, label: str = "id") -> uuid.UUID:
+    """Parse a UUID string; raises ValueError with a clear message on failure."""
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, AttributeError) as exc:
+        raise ValueError(f"Invalid {label}: {value!r}") from exc
 
 logger = logging.getLogger(__name__)
 
@@ -39,25 +50,17 @@ def process_event(event: dict[str, Any]) -> None:
 
 def check_stuck_leads(db_session: Session) -> list[str]:
     """Return company IDs stale for 5+ days in non-terminal statuses."""
-    rows = db_session.execute(
-        text(
-            """
-            SELECT id
-            FROM companies
-            WHERE updated_at < (NOW() - INTERVAL '5 days')
-              AND COALESCE(status, '') NOT IN (
-                    'won',
-                    'lost',
-                    'no_response',
-                    'archived',
-                    'unsubscribed'
-              )
-            ORDER BY updated_at ASC
-            """
-        )
-    ).mappings().all()
-
-    company_ids = [str(row.get("id")) for row in rows if row.get("id")]
+    cutoff = datetime.now(timezone.utc) - timedelta(days=5)
+    company_ids: list[str] = [
+        str(cid) for cid in db_session.execute(
+            select(Company.id)
+            .where(
+                Company.updated_at < cutoff,
+                Company.status.not_in(list(_TERMINAL_STATUSES)),
+            )
+            .order_by(Company.updated_at.asc())
+        ).scalars().all()
+    ]
 
     for company_id in company_ids:
         logger.warning("Stuck lead detected: %s", company_id)
@@ -67,76 +70,44 @@ def check_stuck_leads(db_session: Session) -> list[str]:
 
 def resolve_stuck_lead(company_id: str, db_session: Session) -> str:
     """Resolve one stuck lead based on current state and related activity."""
-    company = db_session.execute(
-        text(
-            """
-            SELECT id, name, status, updated_at
-            FROM companies
-            WHERE id = :company_id
-            LIMIT 1
-            """
-        ),
-        {"company_id": company_id},
-    ).mappings().first()
+    cid = _parse_uuid(company_id, "company_id")
+    company = db_session.get(Company, cid)
 
     if not company:
         return "not_found"
 
-    status = str(company.get("status") or "").strip().lower()
+    status = str(company.status or "").strip().lower()
 
     if status == "contacted":
         last_sent_at = db_session.execute(
-            text(
-                """
-                SELECT MAX(event_at)
-                FROM outreach_events
-                WHERE company_id = :company_id
-                  AND event_type IN ('sent', 'followup_sent')
-                """
-            ),
-            {"company_id": company_id},
-        ).scalar_one_or_none()
+            select(func.max(OutreachEvent.event_at)).where(
+                OutreachEvent.company_id == cid,
+                OutreachEvent.event_type.in_(["sent", "followup_sent"]),
+            )
+        ).scalar()
 
         replied_exists = db_session.execute(
-            text(
-                """
-                SELECT 1
-                FROM outreach_events
-                WHERE company_id = :company_id
-                  AND event_type = 'replied'
-                LIMIT 1
-                """
-            ),
-            {"company_id": company_id},
-        ).first() is not None
+            select(OutreachEvent.id)
+            .where(
+                OutreachEvent.company_id == cid,
+                OutreachEvent.event_type == "replied",
+            )
+            .limit(1)
+        ).scalar() is not None
 
         if last_sent_at is not None and not replied_exists:
-            stale_enough = db_session.execute(
-                text(
-                    """
-                    SELECT (:last_sent_at::timestamp < (NOW() - INTERVAL '14 days')) AS stale
-                    """
-                ),
-                {"last_sent_at": last_sent_at},
-            ).scalar_one()
-
-            if bool(stale_enough):
+            stale_cutoff = datetime.now(timezone.utc) - timedelta(days=14)
+            if last_sent_at < stale_cutoff:
                 followup_scheduler.mark_sequence_complete(company_id=company_id, db_session=db_session)
                 update_lead_status(company_id=company_id, new_status="no_response", db_session=db_session)
                 return "marked_no_response"
 
     if status == "scored":
         has_draft = db_session.execute(
-            text(
-                """
-                SELECT 1
-                FROM email_drafts
-                WHERE company_id = :company_id
-                LIMIT 1
-                """
-            ),
-            {"company_id": company_id},
-        ).first() is not None
+            select(EmailDraft.id)
+            .where(EmailDraft.company_id == cid)
+            .limit(1)
+        ).scalar() is not None
 
         if not has_draft:
             logger.warning("Lead scored but no email drafted yet: %s", company_id)
@@ -144,23 +115,19 @@ def resolve_stuck_lead(company_id: str, db_session: Session) -> str:
 
     if status == "draft_created":
         approved_exists = db_session.execute(
-            text(
-                """
-                SELECT 1
-                FROM email_drafts
-                WHERE company_id = :company_id
-                  AND approved_human = true
-                LIMIT 1
-                """
-            ),
-            {"company_id": company_id},
-        ).first() is not None
+            select(EmailDraft.id)
+            .where(
+                EmailDraft.company_id == cid,
+                EmailDraft.approved_human == True,  # noqa: E712
+            )
+            .limit(1)
+        ).scalar() is not None
 
         if not approved_exists:
             logger.warning("Draft waiting human approval > 5 days: %s", company_id)
             _send_approval_reminder(
                 company_id=company_id,
-                company_name=str(company.get("name") or "Unknown Company"),
+                company_name=str(company.name or "Unknown Company"),
             )
             return "reminded_approval_needed"
 

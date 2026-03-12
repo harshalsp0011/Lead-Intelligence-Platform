@@ -73,6 +73,10 @@ FastAPI router modules, one file per resource.
 - `PATCH /emails/{draft_id}/reject`     — hard-delete draft, log reason
 - `POST  /emails/{draft_id}/regenerate` — delete + re-generate via writer agent
 
+Email and lead routes now read and write through `database/orm_models.py`
+instead of raw SQL text statements. Failed API-key checks and not-found API
+paths are logged before raising to keep request failures observable.
+
 **pipeline.py** — prefix `/pipeline`
 - `GET /pipeline/status`   — stage counts + pipeline value + total_active
 - `GET /pipeline/health`   — per-service health + computed overall_status

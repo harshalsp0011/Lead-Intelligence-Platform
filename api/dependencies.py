@@ -21,12 +21,15 @@ Usage:
 """
 
 from collections.abc import Generator
+import logging
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from config.settings import Settings, get_settings
 from database.connection import SessionLocal
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +78,7 @@ def verify_api_key(
     expected_key = settings.API_KEY
 
     if not provided_key or provided_key != expected_key:
+        logger.warning("API key validation failed for request path %s", request.url.path)
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing API key.",

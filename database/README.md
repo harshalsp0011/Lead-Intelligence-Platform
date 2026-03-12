@@ -5,6 +5,11 @@ This folder holds the database connection code, SQL schema files, and seed data 
 `connection.py`
 Creates the PostgreSQL engine, opens sessions, checks connectivity, and runs SQL migrations.
 
+`orm_models.py`
+Defines typed SQLAlchemy ORM mappings for `companies`, `company_features`, `lead_scores`,
+`contacts`, `email_drafts`, and `outreach_events`. Services can import these models to use
+ORM queries instead of raw SQL text statements.
+
 `migrations/`
 Contains the SQL files that create tables in order.
 

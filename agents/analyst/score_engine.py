@@ -61,8 +61,8 @@ def compute_score(
 def assign_tier(score: float) -> str:
     """Assign high/medium/low tier using configured thresholds."""
     settings = get_settings()
-    high_threshold = getattr(settings, "HIGH_SCORE_THRESHOLD", 70)
-    medium_threshold = getattr(settings, "MEDIUM_SCORE_THRESHOLD", 40)
+    high_threshold = settings.HIGH_SCORE_THRESHOLD
+    medium_threshold = settings.MEDIUM_SCORE_THRESHOLD
 
     if score >= float(high_threshold):
         return "high"

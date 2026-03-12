@@ -8,12 +8,15 @@ new company records into the `companies` table.
 """
 
 import re
+import uuid
 from typing import Any, Optional
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
-from sqlalchemy import text
+from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+from database.orm_models import Company
 
 _PHONE_REGEX = re.compile(r"(?:\+?1[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})")
 _URL_REGEX = re.compile(r"https?://[^\s<>'\"]+", re.IGNORECASE)
@@ -146,19 +149,12 @@ def check_duplicate(domain: Optional[str], db_session: Session) -> bool:
     if not domain:
         return False
 
-    result = db_session.execute(
-        text(
-            """
-            SELECT 1
-            FROM companies
-            WHERE website ILIKE :pattern
-            LIMIT 1
-            """
-        ),
-        {"pattern": f"%{domain}%"},
+    return (
+        db_session.execute(
+            select(Company.id).where(Company.website.ilike(f"%{domain}%")).limit(1)
+        ).scalar()
+        is not None
     )
-
-    return result.first() is not None
 
 
 def save_to_database(company_dict: dict[str, Any], db_session: Session) -> str:
@@ -167,43 +163,20 @@ def save_to_database(company_dict: dict[str, Any], db_session: Session) -> str:
     state = normalize_state(company_dict.get("state"))
 
     try:
-        result = db_session.execute(
-            text(
-                """
-                INSERT INTO companies (
-                    name,
-                    website,
-                    industry,
-                    city,
-                    state,
-                    source,
-                    source_url
-                )
-                VALUES (
-                    :name,
-                    :website,
-                    :industry,
-                    :city,
-                    :state,
-                    :source,
-                    :source_url
-                )
-                RETURNING id
-                """
-            ),
-            {
-                "name": company_dict.get("name"),
-                "website": company_dict.get("website"),
-                "industry": industry,
-                "city": company_dict.get("city"),
-                "state": state,
-                "source": company_dict.get("source"),
-                "source_url": company_dict.get("source_url"),
-            },
+        company = Company(
+            id=uuid.uuid4(),
+            name=company_dict.get("name"),
+            website=company_dict.get("website"),
+            industry=industry,
+            city=company_dict.get("city"),
+            state=state,
+            source=company_dict.get("source"),
+            source_url=company_dict.get("source_url"),
         )
-        inserted_id = result.scalar_one()
+        db_session.add(company)
+        db_session.flush()
         db_session.commit()
-        return str(inserted_id)
+        return str(company.id)
     except Exception:
         db_session.rollback()
         raise

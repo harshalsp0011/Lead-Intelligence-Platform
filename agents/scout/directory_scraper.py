@@ -8,6 +8,7 @@ the company extractor, which cleans these raw listings before saving them.
 """
 
 import json
+import logging
 import re
 import time
 from pathlib import Path
@@ -19,6 +20,8 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 
 from config.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DIRECTORY_SOURCES_PATH = _PROJECT_ROOT / "data" / "sources" / "directory_urls.json"
@@ -118,11 +121,7 @@ def fetch_page(url: str, proxy_url: Optional[str] = None) -> str:
     """Fetch a page with realistic headers and retry on transient failures."""
     settings = get_settings()
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/122.0.0.0 Safari/537.36"
-        ),
+        "User-Agent": str(settings.SCRAPER_USER_AGENT),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Cache-Control": "no-cache",
@@ -134,16 +133,29 @@ def fetch_page(url: str, proxy_url: Optional[str] = None) -> str:
     last_error: Exception | None = None
     for attempt in range(settings.MAX_RETRIES):
         try:
-            response = requests.get(url, headers=headers, proxies=proxies, timeout=30)
+            response = requests.get(
+                url,
+                headers=headers,
+                proxies=proxies,
+                timeout=settings.SCRAPER_REQUEST_TIMEOUT_SECONDS,
+            )
             response.raise_for_status()
             return response.text
         except requests.RequestException as exc:
             last_error = exc
+            logger.warning(
+                "Directory fetch failed for %s on attempt %s/%s: %s",
+                url,
+                attempt + 1,
+                settings.MAX_RETRIES,
+                exc,
+            )
             if attempt == settings.MAX_RETRIES - 1:
                 break
         finally:
             respect_rate_limit(settings.REQUEST_DELAY_SECONDS)
 
+    logger.error("Failed to fetch %s after %s attempts", url, settings.MAX_RETRIES)
     raise RuntimeError(f"Failed to fetch {url} after {settings.MAX_RETRIES} attempts") from last_error
 
 
@@ -154,6 +166,7 @@ def load_directory_sources() -> list[dict[str, Any]]:
 
 
 def _find_listing_elements(soup: BeautifulSoup) -> list[Tag]:
+    """Return HTML elements that look like company listing cards."""
     candidates: list[Tag] = []
     seen: set[int] = set()
 
@@ -181,6 +194,7 @@ def _find_listing_elements(soup: BeautifulSoup) -> list[Tag]:
 
 
 def _extract_name_from_listing(tag: Tag) -> Optional[str]:
+    """Extract the company name from one listing card."""
     for selector in ("h1", "h2", "h3", "h4", "[itemprop='name']", "a[title]"):
         element = tag.select_one(selector)
         if element:
@@ -199,6 +213,7 @@ def _extract_name_from_listing(tag: Tag) -> Optional[str]:
 
 
 def _extract_website_from_listing(tag: Tag) -> Optional[str]:
+    """Extract the first absolute website URL found inside a listing card."""
     for anchor in tag.find_all("a", href=True):
         href = _get_attribute_string(anchor, "href")
         if href and href.strip().lower().startswith(("http://", "https://")):
@@ -207,6 +222,7 @@ def _extract_website_from_listing(tag: Tag) -> Optional[str]:
 
 
 def _extract_text_by_keywords(tag: Tag, keywords: tuple[str, ...]) -> Optional[str]:
+    """Find text content in a listing card using class, id, or regex keyword hints."""
     for element in tag.find_all(True):
         classes = (_get_attribute_string(element, "class") or "").lower()
         tag_id = (_get_attribute_string(element, "id") or "").lower()
@@ -223,10 +239,12 @@ def _extract_text_by_keywords(tag: Tag, keywords: tuple[str, ...]) -> Optional[s
 
 
 def _clean_labeled_text(value: str) -> str:
+    """Strip any leading field label such as `City:` from extracted text."""
     return value.split(":", 1)[1].strip() if ":" in value else value.strip()
 
 
 def _extract_page_number(value: str) -> Optional[int]:
+    """Extract a page number from pagination text or URLs."""
     match = re.search(r"\bpage(?:=|/)?\s*(\d+)\b|\b(\d+)\b", value, re.IGNORECASE)
     if not match:
         return None
@@ -236,6 +254,7 @@ def _extract_page_number(value: str) -> Optional[int]:
 
 
 def _get_attribute_string(tag: Any, attribute_name: str) -> Optional[str]:
+    """Return a tag attribute as a normalized string."""
     value = tag.get(attribute_name)
     if value is None:
         return None

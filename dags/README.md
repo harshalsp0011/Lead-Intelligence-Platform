@@ -63,13 +63,12 @@ DAG parameters:
 
 ## Configuration
 
-The weekly scout DAG reads its target settings from `config.settings` first and
-falls back to environment variables when the settings object does not define
-them yet.
+The weekly scout DAG reads its target settings only from `config.settings`.
+There is no direct `os.getenv(...)` fallback in the DAG module anymore.
 
 Supported scout values:
-- `TARGET_INDUSTRIES`: comma-separated industries or `all`
-- `TARGET_LOCATIONS`: comma-separated `City, ST` values or `all`
+- `SCOUT_TARGET_INDUSTRIES`: comma-separated industries or `all`
+- `SCOUT_TARGET_LOCATIONS`: comma-separated `City, ST` values or `all`
 - `SCOUT_WEEKLY_TARGET_COUNT`: weekly company target count
 
 The daily analyst DAG uses existing database and settings configuration without

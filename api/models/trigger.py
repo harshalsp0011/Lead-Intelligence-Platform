@@ -14,10 +14,13 @@ Usage:
 """
 
 from datetime import datetime
+import logging
 from typing import Any, Dict, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 _VALID_INDUSTRIES = {
     "healthcare",
@@ -61,11 +64,13 @@ class TriggerRequest(BaseModel):
 
     def model_post_init(self, __context: Any) -> None:  # noqa: ANN401
         if self.industry not in _VALID_INDUSTRIES:
+            logger.error("Invalid trigger industry received: %s", self.industry)
             raise ValueError(
                 f"industry must be one of {sorted(_VALID_INDUSTRIES)}, "
                 f"got '{self.industry}'."
             )
         if self.run_mode not in _VALID_RUN_MODES:
+            logger.error("Invalid trigger run_mode received: %s", self.run_mode)
             raise ValueError(
                 f"run_mode must be one of {sorted(_VALID_RUN_MODES)}, "
                 f"got '{self.run_mode}'."

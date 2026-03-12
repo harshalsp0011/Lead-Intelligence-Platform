@@ -18,22 +18,28 @@ Usage:
 - Include this router in api/main.py with prefix='/reports'.
 """
 
+import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import text
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_db, verify_api_key
 from api.models.report import TopLeadItem, TopLeadsResponse, WeeklyReportResponse
 from agents.orchestrator import pipeline_monitor, report_generator
+from database.orm_models import Company, CompanyFeature, Contact, LeadScore
 
+logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(verify_api_key)])
+
+_EXCLUDED_STATUSES = {"lost", "archived", "no_response"}
 
 
 def _fmt_currency(value: float) -> str:
+    """Format a float dollar value as a compact human-readable currency string."""
     v = float(value or 0)
     if v >= 1_000_000:
         return f"${v / 1_000_000:.1f}M"
@@ -63,23 +69,18 @@ def weekly_report(
     replies = data.get("replies", {})
     pv = data.get("pipeline_value", {})
 
-    # Outcome counts require a direct query as they track status transitions.
-    outcome_row = db.execute(
-        text(
-            """
-            SELECT
-                COUNT(*) FILTER (WHERE status = 'meeting_booked') AS meetings_booked,
-                COUNT(*) FILTER (WHERE status = 'won')            AS deals_won,
-                COUNT(*) FILTER (WHERE status = 'lost')           AS deals_lost
-            FROM companies
-            WHERE updated_at >= :start_dt AND updated_at <= :end_dt
-            """
-        ),
-        {
-            "start_dt": datetime.combine(start_date, datetime.min.time()),
-            "end_dt": datetime.combine(end_date, datetime.max.time()),
-        },
-    ).mappings().first() or {}
+    # Outcome counts: load statuses for companies updated in the date range.
+    start_dt = datetime.combine(start_date, datetime.min.time())
+    end_dt = datetime.combine(end_date, datetime.max.time())
+    statuses: list[str] = list(db.execute(
+        select(Company.status).where(
+            Company.updated_at >= start_dt,
+            Company.updated_at <= end_dt,
+        )
+    ).scalars().all())
+    meetings_booked = sum(1 for s in statuses if s == "meeting_booked")
+    deals_won = sum(1 for s in statuses if s == "won")
+    deals_lost = sum(1 for s in statuses if s == "lost")
 
     mid = float(pv.get("total_savings_mid") or 0.0)
 
@@ -102,9 +103,9 @@ def weekly_report(
         replies_neutral=int(replies.get("neutral") or 0),
         replies_negative=int(replies.get("negative") or 0),
         reply_rate_pct=float(replies.get("reply_rate_pct") or 0.0),
-        meetings_booked=int(outcome_row.get("meetings_booked") or 0),
-        deals_won=int(outcome_row.get("deals_won") or 0),
-        deals_lost=int(outcome_row.get("deals_lost") or 0),
+        meetings_booked=meetings_booked,
+        deals_won=deals_won,
+        deals_lost=deals_lost,
         pipeline_value_mid=mid,
         pipeline_value_formatted=_fmt_currency(mid),
         troy_banks_revenue_estimate=float(pv.get("total_tb_revenue_est") or 0.0),
@@ -118,65 +119,60 @@ def top_leads(
     db: Session = Depends(get_db),
 ) -> TopLeadsResponse:
     """Return top high-tier active leads ranked by score, with all required fields."""
-    rows = db.execute(
-        text(
-            """
-            SELECT
-                c.id        AS company_id,
-                c.name      AS company_name,
-                c.industry,
-                c.state,
-                COALESCE(ls.score, 0.0) AS score,
-                COALESCE(ls.tier, 'low') AS tier,
-                COALESCE(cf.savings_low,  0.0) AS savings_low,
-                COALESCE(cf.savings_high, 0.0) AS savings_high,
-                COALESCE(c.status, 'new') AS status,
-                EXISTS (
-                    SELECT 1 FROM contacts ct
-                    WHERE ct.company_id = c.id
-                      AND ct.unsubscribed = false
-                ) AS contact_found
-            FROM companies c
-            LEFT JOIN LATERAL (
-                SELECT score, tier
-                FROM lead_scores
-                WHERE company_id = c.id
-                ORDER BY scored_at DESC
-                LIMIT 1
-            ) ls ON true
-            LEFT JOIN LATERAL (
-                SELECT savings_low, savings_high
-                FROM company_features
-                WHERE company_id = c.id
-                ORDER BY computed_at DESC
-                LIMIT 1
-            ) cf ON true
-            WHERE COALESCE(ls.tier, '') = 'high'
-              AND COALESCE(c.status, '') NOT IN ('lost', 'archived', 'no_response')
-            ORDER BY ls.score DESC
-            LIMIT :limit
-            """
-        ),
-        {"limit": limit},
-    ).mappings().all()
+    active_companies: list[Company] = list(db.execute(
+        select(Company).where(Company.status.not_in(list(_EXCLUDED_STATUSES)))
+    ).scalars().all())
 
-    items = [
-        TopLeadItem(
-            company_id=UUID(str(r["company_id"])),
-            company_name=str(r.get("company_name") or ""),
-            industry=str(r.get("industry") or ""),
-            state=str(r.get("state") or ""),
-            score=float(r.get("score") or 0.0),
-            tier=str(r.get("tier") or "low"),
-            savings_formatted=(
-                f"{_fmt_currency(float(r.get('savings_low') or 0))} - "
-                f"{_fmt_currency(float(r.get('savings_high') or 0))}"
-            ),
-            status=str(r.get("status") or "new"),
-            contact_found=bool(r.get("contact_found") or False),
+    items: list[TopLeadItem] = []
+    for company in active_companies:
+        latest_score: LeadScore | None = db.execute(
+            select(LeadScore)
+            .where(LeadScore.company_id == company.id)
+            .order_by(LeadScore.scored_at.desc())
+            .limit(1)
+        ).scalar()
+        if not latest_score or latest_score.tier != "high":
+            continue
+
+        latest_feature: CompanyFeature | None = db.execute(
+            select(CompanyFeature)
+            .where(CompanyFeature.company_id == company.id)
+            .order_by(CompanyFeature.computed_at.desc())
+            .limit(1)
+        ).scalar()
+
+        contact_found: bool = (
+            db.execute(
+                select(Contact)
+                .where(
+                    Contact.company_id == company.id,
+                    Contact.unsubscribed == False,  # noqa: E712
+                )
+                .limit(1)
+            ).scalar()
+            is not None
         )
-        for r in rows
-    ]
+
+        savings_low = float(latest_feature.savings_low or 0.0) if latest_feature else 0.0
+        savings_high = float(latest_feature.savings_high or 0.0) if latest_feature else 0.0
+        items.append(
+            TopLeadItem(
+                company_id=company.id,
+                company_name=str(company.name or ""),
+                industry=str(company.industry or ""),
+                state=str(company.state or ""),
+                score=float(latest_score.score or 0.0),
+                tier=str(latest_score.tier or "low"),
+                savings_formatted=(
+                    f"{_fmt_currency(savings_low)} - {_fmt_currency(savings_high)}"
+                ),
+                status=str(company.status or "new"),
+                contact_found=contact_found,
+            )
+        )
+
+    items.sort(key=lambda x: x.score, reverse=True)
+    items = items[:limit]
     return TopLeadsResponse(leads=items, total_count=len(items))
 
 

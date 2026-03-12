@@ -23,18 +23,28 @@ Usage:
 """
 
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 import requests
-from sqlalchemy import text
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from agents.analyst import enrichment_client
 from agents.orchestrator import task_manager
 from config.settings import get_settings
+from database.orm_models import Company, EmailDraft, LeadScore
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_uuid(value: str) -> uuid.UUID:
+    """Parse a UUID string and raise ValueError for invalid values."""
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid UUID value: {value}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -130,32 +140,25 @@ def run_analyst(
         )
         return {"scored": 0, "high": 0, "medium": 0, "low": 0, "high_ids": []}
 
-    # Query tier breakdown for the companies that were just scored.
-    rows = db_session.execute(
-        text(
-            """
-            SELECT tier, company_id
-            FROM lead_scores
-            WHERE company_id = ANY(:ids)
-            ORDER BY scored_at DESC
-            """
-        ),
-        {"ids": company_ids},
-    ).mappings().all()
-
-    # Keep only the latest score per company to avoid double-counting.
-    seen: set[str] = set()
     counts: dict[str, int] = {"high": 0, "medium": 0, "low": 0}
     high_ids: list[str] = []
-    for row in rows:
-        cid = str(row["company_id"])
-        if cid in seen:
+
+    # Keep only the latest score per company to avoid double-counting.
+    for company_id in company_ids:
+        parsed_company_id = _parse_uuid(company_id)
+        latest_score = db_session.execute(
+            select(LeadScore)
+            .where(LeadScore.company_id == parsed_company_id)
+            .order_by(LeadScore.scored_at.desc())
+            .limit(1)
+        ).scalar()
+        if latest_score is None:
             continue
-        seen.add(cid)
-        tier = str(row["tier"]).lower()
+
+        tier = str(latest_score.tier or "").lower()
         counts[tier] = counts.get(tier, 0) + 1
         if tier == "high":
-            high_ids.append(cid)
+            high_ids.append(company_id)
 
     total = sum(counts.values())
     return {
@@ -181,22 +184,16 @@ def run_contact_enrichment(
     if not company_ids:
         return {"contacts_found": 0}
 
+    parsed_company_ids = [_parse_uuid(company_id) for company_id in company_ids]
     companies = db_session.execute(
-        text(
-            """
-            SELECT id, name, website
-            FROM companies
-            WHERE id = ANY(:ids)
-            """
-        ),
-        {"ids": company_ids},
-    ).mappings().all()
+        select(Company).where(Company.id.in_(parsed_company_ids))
+    ).scalars().all()
 
     total_contacts = 0
-    for row in companies:
-        company_id = str(row["id"])
-        name = str(row["name"] or "")
-        website = str(row["website"] or "")
+    for company in companies:
+        company_id = str(company.id)
+        name = str(company.name or "")
+        website = str(company.website or "")
         try:
             contacts = enrichment_client.find_contacts(
                 company_name=name,
@@ -219,23 +216,19 @@ def run_writer(db_session: Session) -> dict[str, Any]:
     Returns dict with key `drafts_created` (int).
     """
     rows = db_session.execute(
-        text(
-            """
-            SELECT ls.company_id
-            FROM lead_scores ls
-            WHERE ls.tier = 'high'
-              AND ls.approved_human = true
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM email_drafts ed
-                  WHERE ed.company_id = ls.company_id
-              )
-            ORDER BY ls.scored_at DESC
-            """
+        select(LeadScore.company_id)
+        .where(
+            LeadScore.tier == "high",
+            LeadScore.approved_human.is_(True),
+            ~select(EmailDraft.id)
+            .where(EmailDraft.company_id == LeadScore.company_id)
+            .correlate(LeadScore)
+            .exists(),
         )
-    ).mappings().all()
+        .order_by(LeadScore.scored_at.desc())
+    ).all()
 
-    approved_ids: list[str] = [str(r["company_id"]) for r in rows]
+    approved_ids: list[str] = [str(company_id) for (company_id,) in rows if company_id]
     if not approved_ids:
         return {"drafts_created": 0}
 

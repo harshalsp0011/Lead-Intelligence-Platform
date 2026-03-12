@@ -7,13 +7,15 @@ settings (`hunter` or `apollo`) and saves deduplicated contacts to the
 `contacts` table.
 """
 
+import uuid
 from typing import Any
 
 import requests
-from sqlalchemy import text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from config.settings import get_settings
+from database.orm_models import Company, Contact
 
 _TARGET_TITLES = {
     "cfo",
@@ -176,89 +178,41 @@ def save_contact(contact_dict: dict[str, Any], company_id: str, db_session: Sess
     if not email:
         raise ValueError("Contact email is required to save contact")
 
-    existing = db_session.execute(
-        text(
-            """
-            SELECT id
-            FROM contacts
-            WHERE LOWER(email) = LOWER(:email)
-            LIMIT 1
-            """
-        ),
-        {"email": email},
-    ).scalar_one_or_none()
-
+    existing: uuid.UUID | None = db_session.execute(
+        select(Contact.id).where(func.lower(Contact.email) == email.lower()).limit(1)
+    ).scalar()
     if existing is not None:
         return str(existing)
 
     provider = (get_settings().ENRICHMENT_PROVIDER or "hunter").strip().lower()
 
-    inserted = db_session.execute(
-        text(
-            """
-            INSERT INTO contacts (
-                company_id,
-                full_name,
-                title,
-                email,
-                linkedin_url,
-                source,
-                verified,
-                unsubscribed
-            )
-            VALUES (
-                :company_id,
-                :full_name,
-                :title,
-                :email,
-                :linkedin_url,
-                :source,
-                :verified,
-                false
-            )
-            RETURNING id
-            """
-        ),
-        {
-            "company_id": company_id,
-            "full_name": _clean_string(contact_dict.get("full_name")),
-            "title": _clean_string(contact_dict.get("title")),
-            "email": email,
-            "linkedin_url": _clean_string(contact_dict.get("linkedin_url")),
-            "source": provider,
-            "verified": bool(contact_dict.get("verified") or False),
-        },
-    ).scalar_one()
-
+    new_id = uuid.uuid4()
+    contact = Contact(
+        id=new_id,
+        company_id=uuid.UUID(str(company_id)) if company_id else None,
+        full_name=_clean_string(contact_dict.get("full_name")),
+        title=_clean_string(contact_dict.get("title")),
+        email=email,
+        linkedin_url=_clean_string(contact_dict.get("linkedin_url")),
+        source=provider,
+        verified=bool(contact_dict.get("verified") or False),
+        unsubscribed=False,
+    )
+    db_session.add(contact)
     db_session.commit()
-    return str(inserted)
+    return str(new_id)
 
 
 def get_priority_contact(company_id: str, db_session: Session) -> dict[str, Any] | None:
     """Return the highest-priority contact for outreach for one company."""
-    rows = db_session.execute(
-        text(
-            """
-            SELECT
-                id,
-                company_id,
-                full_name,
-                title,
-                email,
-                linkedin_url,
-                source,
-                verified,
-                unsubscribed,
-                created_at
-            FROM contacts
-            WHERE company_id = :company_id
-              AND COALESCE(unsubscribed, false) = false
-            """
-        ),
-        {"company_id": company_id},
-    ).mappings().all()
+    contacts = db_session.execute(
+        select(Contact).where(
+            Contact.company_id == uuid.UUID(str(company_id)),
+            Contact.unsubscribed == False,  # noqa: E712
+        )
+    ).scalars().all()
 
-    if not rows:
+    if not contacts:
         return None
 
     def contact_rank(row: dict[str, Any]) -> tuple[int, int]:
@@ -267,7 +221,21 @@ def get_priority_contact(company_id: str, db_session: Session) -> dict[str, Any]
         verified_priority = 0 if bool(row.get("verified")) else 1
         return (title_priority, verified_priority)
 
-    best = min((dict(row) for row in rows), key=contact_rank)
+    def _contact_as_dict(c: Contact) -> dict[str, Any]:
+        return {
+            "id": c.id,
+            "company_id": c.company_id,
+            "full_name": c.full_name,
+            "title": c.title,
+            "email": c.email,
+            "linkedin_url": c.linkedin_url,
+            "source": c.source,
+            "verified": c.verified,
+            "unsubscribed": c.unsubscribed,
+            "created_at": c.created_at,
+        }
+
+    best = min((_contact_as_dict(c) for c in contacts), key=contact_rank)
     return best
 
 
@@ -276,32 +244,20 @@ def _resolve_company_id(company_name: str, website_domain: str, db_session: Sess
 
     if domain:
         by_domain = db_session.execute(
-            text(
-                """
-                SELECT id
-                FROM companies
-                WHERE website ILIKE :website_pattern
-                ORDER BY created_at DESC
-                LIMIT 1
-                """
-            ),
-            {"website_pattern": f"%{domain}%"},
-        ).scalar_one_or_none()
+            select(Company.id)
+            .where(Company.website.ilike(f"%{domain}%"))
+            .order_by(Company.created_at.desc())
+            .limit(1)
+        ).scalar()
         if by_domain is not None:
             return str(by_domain)
 
     by_name = db_session.execute(
-        text(
-            """
-            SELECT id
-            FROM companies
-            WHERE LOWER(name) = LOWER(:company_name)
-            ORDER BY created_at DESC
-            LIMIT 1
-            """
-        ),
-        {"company_name": company_name},
-    ).scalar_one_or_none()
+        select(Company.id)
+        .where(func.lower(Company.name) == company_name.lower())
+        .order_by(Company.created_at.desc())
+        .limit(1)
+    ).scalar()
 
     if by_name is None:
         return None

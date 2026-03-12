@@ -15,13 +15,23 @@ Usage:
   when a follow-up event becomes due.
 """
 
+import uuid
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from agents.writer import llm_connector, template_engine, writer_agent
 from config.settings import get_settings
+from database.orm_models import Company, CompanyFeature, Contact, EmailDraft, LeadScore
+
+
+def _parse_uuid(value: str, label: str = "id") -> uuid.UUID:
+    """Parse a UUID string; raises ValueError with a clear message on failure."""
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, AttributeError) as exc:
+        raise ValueError(f"Invalid {label}: {value!r}") from exc
 
 
 def build_followup_email(
@@ -30,76 +40,35 @@ def build_followup_email(
     db_session: Session,
 ) -> dict[str, str]:
     """Build one follow-up subject/body pair from original draft and context."""
-    draft = db_session.execute(
-        text(
-            """
-            SELECT id, company_id, contact_id, subject_line, body
-            FROM email_drafts
-            WHERE id = :draft_id
-            LIMIT 1
-            """
-        ),
-        {"draft_id": original_draft_id},
-    ).mappings().first()
-
+    draft: EmailDraft | None = db_session.get(
+        EmailDraft, _parse_uuid(original_draft_id, "original_draft_id")
+    )
     if not draft:
         raise ValueError(f"Original draft not found: {original_draft_id}")
 
-    company_id = str(draft.get("company_id") or "")
-    contact_id = str(draft.get("contact_id") or "")
-
-    company = db_session.execute(
-        text(
-            """
-            SELECT id, name, industry, state, site_count
-            FROM companies
-            WHERE id = :company_id
-            LIMIT 1
-            """
-        ),
-        {"company_id": company_id},
-    ).mappings().first()
-
-    contact = db_session.execute(
-        text(
-            """
-            SELECT id, full_name, email, unsubscribed
-            FROM contacts
-            WHERE id = :contact_id
-            LIMIT 1
-            """
-        ),
-        {"contact_id": contact_id},
-    ).mappings().first()
-
-    features = db_session.execute(
-        text(
-            """
-            SELECT id, estimated_site_count, savings_low, savings_mid, savings_high
-            FROM company_features
-            WHERE company_id = :company_id
-            ORDER BY computed_at DESC
-            LIMIT 1
-            """
-        ),
-        {"company_id": company_id},
-    ).mappings().first()
-
-    score = db_session.execute(
-        text(
-            """
-            SELECT id, score, tier
-            FROM lead_scores
-            WHERE company_id = :company_id
-            ORDER BY scored_at DESC
-            LIMIT 1
-            """
-        ),
-        {"company_id": company_id},
-    ).mappings().first()
+    company: Company | None = (
+        db_session.get(Company, draft.company_id) if draft.company_id else None
+    )
+    contact: Contact | None = (
+        db_session.get(Contact, draft.contact_id) if draft.contact_id else None
+    )
 
     if not company or not contact:
         raise ValueError("Company or contact not found for follow-up email generation")
+
+    features: CompanyFeature | None = db_session.execute(
+        select(CompanyFeature)
+        .where(CompanyFeature.company_id == draft.company_id)
+        .order_by(CompanyFeature.computed_at.desc())
+        .limit(1)
+    ).scalar()
+
+    score: LeadScore | None = db_session.execute(
+        select(LeadScore)
+        .where(LeadScore.company_id == draft.company_id)
+        .order_by(LeadScore.scored_at.desc())
+        .limit(1)
+    ).scalar()
 
     settings = get_settings()
 
@@ -115,7 +84,7 @@ def build_followup_email(
     raw_template = get_followup_template(follow_up_number)
     filled_template = template_engine.fill_static_fields(raw_template, context)
 
-    original_subject = str(draft.get("subject_line") or "")
+    original_subject = str(draft.subject_line or "")
     subject = build_followup_subject(original_subject, follow_up_number)
 
     body = _polish_followup_body(

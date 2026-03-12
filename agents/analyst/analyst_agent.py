@@ -6,13 +6,24 @@ This module coordinates analysis, scoring, and persistence for one company at a
 time, and can batch-process a list of company IDs.
 """
 
+import uuid
+from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from agents.analyst import savings_calculator, score_engine, spend_calculator
 from agents.scout import website_crawler
+from database.orm_models import Company, CompanyFeature, Contact, LeadScore
+
+
+def _parse_uuid(value: str, label: str = "id") -> uuid.UUID:
+    """Parse a UUID string; raises ValueError with a clear message on failure."""
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, AttributeError) as exc:
+        raise ValueError(f"Invalid {label}: {value!r}") from exc
 
 _DEREGULATED_STATES = {
     "NY",
@@ -49,28 +60,19 @@ def run(company_ids: list[str], db_session: Session) -> list[str]:
 
 def process_one_company(company_id: str, db_session: Session) -> dict[str, Any]:
     """Run full analyst pipeline for one company and persist outputs."""
-    row = db_session.execute(
-        text(
-            """
-            SELECT
-                id,
-                name,
-                website,
-                industry,
-                state,
-                employee_count,
-                site_count
-            FROM companies
-            WHERE id = :company_id
-            """
-        ),
-        {"company_id": company_id},
-    ).mappings().first()
-
-    if row is None:
+    company_obj = db_session.get(Company, _parse_uuid(company_id, "company_id"))
+    if company_obj is None:
         raise ValueError(f"Company not found: {company_id}")
 
-    company = dict(row)
+    company = {
+        "id": company_obj.id,
+        "name": company_obj.name,
+        "website": company_obj.website,
+        "industry": company_obj.industry,
+        "state": company_obj.state,
+        "employee_count": company_obj.employee_count,
+        "site_count": company_obj.site_count,
+    }
     enriched = gather_company_data(company, db_session)
 
     site_count = int(enriched.get("site_count") or 1)
@@ -134,17 +136,8 @@ def process_one_company(company_id: str, db_session: Session) -> dict[str, Any]:
         db_session=db_session,
     )
 
-    db_session.execute(
-        text(
-            """
-            UPDATE companies
-            SET status = 'scored',
-                updated_at = NOW()
-            WHERE id = :company_id
-            """
-        ),
-        {"company_id": company_id},
-    )
+    company_obj.status = "scored"
+    company_obj.updated_at = datetime.now(timezone.utc)
     db_session.commit()
 
     return {
@@ -190,60 +183,25 @@ def check_deregulated_state(state: str) -> bool:
 
 def save_features(company_id: str, features_dict: dict[str, Any], db_session: Session) -> str:
     """Insert company_features row and return new record UUID."""
-    result = db_session.execute(
-        text(
-            """
-            INSERT INTO company_features (
-                company_id,
-                estimated_sqft_per_site,
-                estimated_site_count,
-                estimated_annual_utility_spend,
-                estimated_annual_telecom_spend,
-                estimated_total_spend,
-                savings_low,
-                savings_mid,
-                savings_high,
-                industry_fit_score,
-                multi_site_confirmed,
-                deregulated_state,
-                data_quality_score
-            )
-            VALUES (
-                :company_id,
-                :estimated_sqft_per_site,
-                :estimated_site_count,
-                :estimated_annual_utility_spend,
-                :estimated_annual_telecom_spend,
-                :estimated_total_spend,
-                :savings_low,
-                :savings_mid,
-                :savings_high,
-                :industry_fit_score,
-                :multi_site_confirmed,
-                :deregulated_state,
-                :data_quality_score
-            )
-            RETURNING id
-            """
-        ),
-        {
-            "company_id": company_id,
-            "estimated_sqft_per_site": features_dict.get("estimated_sqft_per_site"),
-            "estimated_site_count": features_dict.get("estimated_site_count"),
-            "estimated_annual_utility_spend": features_dict.get("estimated_annual_utility_spend"),
-            "estimated_annual_telecom_spend": features_dict.get("estimated_annual_telecom_spend"),
-            "estimated_total_spend": features_dict.get("estimated_total_spend"),
-            "savings_low": features_dict.get("savings_low"),
-            "savings_mid": features_dict.get("savings_mid"),
-            "savings_high": features_dict.get("savings_high"),
-            "industry_fit_score": features_dict.get("industry_fit_score"),
-            "multi_site_confirmed": bool(features_dict.get("multi_site_confirmed")),
-            "deregulated_state": bool(features_dict.get("deregulated_state")),
-            "data_quality_score": features_dict.get("data_quality_score"),
-        },
+    feature_id = uuid.uuid4()
+    feature = CompanyFeature(
+        id=feature_id,
+        company_id=_parse_uuid(company_id, "company_id"),
+        estimated_site_count=features_dict.get("estimated_site_count"),
+        estimated_annual_utility_spend=features_dict.get("estimated_annual_utility_spend"),
+        estimated_annual_telecom_spend=features_dict.get("estimated_annual_telecom_spend"),
+        estimated_total_spend=features_dict.get("estimated_total_spend"),
+        savings_low=features_dict.get("savings_low"),
+        savings_mid=features_dict.get("savings_mid"),
+        savings_high=features_dict.get("savings_high"),
+        industry_fit_score=features_dict.get("industry_fit_score"),
+        multi_site_confirmed=bool(features_dict.get("multi_site_confirmed")),
+        deregulated_state=bool(features_dict.get("deregulated_state")),
+        data_quality_score=features_dict.get("data_quality_score"),
     )
-    inserted_id = result.scalar_one()
-    return str(inserted_id)
+    db_session.add(feature)
+    db_session.flush()
+    return str(feature.id)
 
 
 def save_score(
@@ -254,35 +212,18 @@ def save_score(
     db_session: Session,
 ) -> str:
     """Insert lead_scores row and return new record UUID."""
-    result = db_session.execute(
-        text(
-            """
-            INSERT INTO lead_scores (
-                company_id,
-                score,
-                tier,
-                score_reason,
-                approved_human
-            )
-            VALUES (
-                :company_id,
-                :score,
-                :tier,
-                :score_reason,
-                false
-            )
-            RETURNING id
-            """
-        ),
-        {
-            "company_id": company_id,
-            "score": float(score),
-            "tier": tier,
-            "score_reason": score_reason,
-        },
+    score_id = uuid.uuid4()
+    lead_score = LeadScore(
+        id=score_id,
+        company_id=_parse_uuid(company_id, "company_id"),
+        score=float(score),
+        tier=tier,
+        score_reason=score_reason,
+        approved_human=False,
     )
-    inserted_id = result.scalar_one()
-    return str(inserted_id)
+    db_session.add(lead_score)
+    db_session.flush()
+    return str(lead_score.id)
 
 
 def decide_data_quality(crawl_result: dict[str, Any], contact_found: bool) -> float:
@@ -297,18 +238,11 @@ def decide_data_quality(crawl_result: dict[str, Any], contact_found: bool) -> fl
 
 
 def _has_contact(company_id: str, db_session: Session) -> bool:
-    result = db_session.execute(
-        text(
-            """
-            SELECT 1
-            FROM contacts
-            WHERE company_id = :company_id
-            LIMIT 1
-            """
-        ),
-        {"company_id": company_id},
-    )
-    return result.first() is not None
+    return db_session.execute(
+        select(Contact.id)
+        .where(Contact.company_id == _parse_uuid(company_id, "company_id"))
+        .limit(1)
+    ).scalar() is not None
 
 
 def _score_industry_fit(industry: str) -> float:

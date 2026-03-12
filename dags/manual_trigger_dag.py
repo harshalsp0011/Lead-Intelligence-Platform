@@ -29,6 +29,7 @@ import requests
 from airflow import DAG
 from airflow.models import Param
 from airflow.providers.standard.operators.python import PythonOperator
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +39,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from agents.orchestrator import orchestrator
 from config.settings import get_settings
 from database.connection import SessionLocal
+from database.orm_models import Company
 
 logger = logging.getLogger(__name__)
 
@@ -176,17 +178,10 @@ def run_selected_mode(**context: Any) -> dict[str, Any]:
             logger.info("Scout stage completed: found %d companies", len(result.get("company_ids", [])))
 
         elif run_mode == "analyst_only":
-            from sqlalchemy import text
-
             unscored_rows = db_session.execute(
-                text(
-                    """
-                    SELECT id
-                    FROM companies
-                    WHERE COALESCE(status, 'new') IN ('new', 'enriched')
-                    LIMIT 500
-                    """.strip()
-                )
+                select(Company.id)
+                .where((Company.status.is_(None)) | (Company.status.in_(["new", "enriched"])))
+                .limit(500)
             ).scalars().all()
             unscored_ids = [str(company_id) for company_id in unscored_rows]
 

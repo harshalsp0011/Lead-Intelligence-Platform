@@ -26,7 +26,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_db, verify_api_key
@@ -38,10 +38,81 @@ from api.models.lead import (
     LeadResponse,
 )
 from config.settings import get_settings
+from database.orm_models import Company, CompanyFeature, Contact, LeadScore
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(verify_api_key)])
+
+TIER_LOW = "low"
+TIER_MEDIUM = "medium"
+TIER_HIGH = "high"
+STATUS_NEW = "new"
+STATUS_APPROVED = "approved"
+STATUS_ARCHIVED = "archived"
+
+
+def _latest_feature(db: Session, company_id: UUID) -> CompanyFeature | None:
+    """Return the latest computed feature row for one company."""
+    return db.execute(
+        select(CompanyFeature)
+        .where(CompanyFeature.company_id == company_id)
+        .order_by(CompanyFeature.computed_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _latest_score(db: Session, company_id: UUID) -> LeadScore | None:
+    """Return the latest score row for one company."""
+    return db.execute(
+        select(LeadScore)
+        .where(LeadScore.company_id == company_id)
+        .order_by(LeadScore.scored_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _contact_found(db: Session, company_id: UUID) -> bool:
+    """Return True when the company has at least one non-unsubscribed contact."""
+    return db.execute(
+        select(Contact.id)
+        .where(
+            Contact.company_id == company_id,
+            func.coalesce(Contact.unsubscribed, False).is_(False),
+        )
+        .limit(1)
+    ).first() is not None
+
+
+def _row_from_models(
+    db: Session,
+    company: Company,
+    feature: CompanyFeature | None,
+    score: LeadScore | None,
+) -> dict[str, Any]:
+    """Assemble a lead response payload from ORM model instances."""
+    return {
+        "company_id": company.id,
+        "company_name": company.name,
+        "industry": company.industry or "",
+        "state": company.state or "",
+        "site_count": company.site_count or 0,
+        "employee_count": company.employee_count or 0,
+        "estimated_total_spend": getattr(feature, "estimated_total_spend", 0.0) or 0.0,
+        "savings_low": getattr(feature, "savings_low", 0.0) or 0.0,
+        "savings_mid": getattr(feature, "savings_mid", 0.0) or 0.0,
+        "savings_high": getattr(feature, "savings_high", 0.0) or 0.0,
+        "score": getattr(score, "score", 0.0) or 0.0,
+        "tier": getattr(score, "tier", TIER_LOW) or TIER_LOW,
+        "score_reason": getattr(score, "score_reason", "") or "",
+        "approved_human": bool(getattr(score, "approved_human", False) or False),
+        "approved_by": getattr(score, "approved_by", None),
+        "approved_at": getattr(score, "approved_at", None),
+        "status": company.status or STATUS_NEW,
+        "contact_found": _contact_found(db, company.id),
+        "date_scored": getattr(score, "scored_at", None) or datetime.now(timezone.utc),
+        "updated_at": company.updated_at or datetime.now(timezone.utc),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +130,7 @@ def _fmt_currency(value: float) -> str:
 
 
 def _build_lead_row(row: dict[str, Any], contingency_fee: float) -> LeadResponse:
+    """Convert a normalized row dictionary into the public lead response schema."""
     savings_mid = float(row.get("savings_mid") or 0.0)
     return LeadResponse(
         company_id=row["company_id"],
@@ -76,12 +148,12 @@ def _build_lead_row(row: dict[str, Any], contingency_fee: float) -> LeadResponse
         savings_high_formatted=_fmt_currency(float(row.get("savings_high") or 0.0)),
         tb_revenue_estimate=round(savings_mid * contingency_fee, 2),
         score=float(row.get("score") or 0.0),
-        tier=str(row.get("tier") or "low"),
+        tier=str(row.get("tier") or TIER_LOW),
         score_reason=str(row.get("score_reason") or ""),
         approved_human=bool(row.get("approved_human") or False),
         approved_by=row.get("approved_by"),
         approved_at=row.get("approved_at"),
-        status=str(row.get("status") or "new"),
+        status=str(row.get("status") or STATUS_NEW),
         contact_found=bool(row.get("contact_found") or False),
         date_scored=row.get("date_scored") or datetime.now(timezone.utc),
     )
@@ -94,117 +166,51 @@ def _query_leads(
     order_by: str = "c.updated_at DESC",
 ) -> tuple[int, int, int, int, list[dict[str, Any]]]:
     """Run the leads query and return (total, high, medium, low, rows)."""
-    conditions: list[str] = ["1=1"]
-    params: dict[str, Any] = {}
-
-    applied_tier = forced_tier or filters.tier
-    if applied_tier:
-        conditions.append("COALESCE(ls.tier, 'low') = :tier")
-        params["tier"] = applied_tier
+    query = select(Company)
 
     if filters.industry:
-        conditions.append("c.industry = :industry")
-        params["industry"] = filters.industry
-
+        query = query.where(Company.industry == filters.industry)
     if filters.state:
-        conditions.append("c.state = :state")
-        params["state"] = filters.state
-
+        query = query.where(Company.state == filters.state)
     if filters.status:
-        conditions.append("c.status = :status")
-        params["status"] = filters.status
+        query = query.where(Company.status == filters.status)
 
-    if filters.min_score is not None:
-        conditions.append("COALESCE(ls.score, 0) >= :min_score")
-        params["min_score"] = filters.min_score
+    companies = db.execute(query).scalars().all()
+    applied_tier = forced_tier or filters.tier
+    rows: list[dict[str, Any]] = []
 
-    if filters.max_score is not None:
-        conditions.append("COALESCE(ls.score, 0) <= :max_score")
-        params["max_score"] = filters.max_score
+    for company in companies:
+        feature = _latest_feature(db, company.id)
+        score = _latest_score(db, company.id)
+        row = _row_from_models(db, company, feature, score)
 
-    if filters.date_from:
-        conditions.append("ls.scored_at >= :date_from")
-        params["date_from"] = filters.date_from
+        if applied_tier and row["tier"] != applied_tier:
+            continue
+        if filters.min_score is not None and float(row["score"] or 0.0) < filters.min_score:
+            continue
+        if filters.max_score is not None and float(row["score"] or 0.0) > filters.max_score:
+            continue
+        if filters.date_from and row["date_scored"] < filters.date_from:
+            continue
+        if filters.date_to and row["date_scored"] > filters.date_to:
+            continue
 
-    if filters.date_to:
-        conditions.append("ls.scored_at <= :date_to")
-        params["date_to"] = filters.date_to
+        rows.append(row)
 
-    where = " AND ".join(conditions)
+    if order_by == "score DESC":
+        rows.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
+    else:
+        rows.sort(key=lambda item: item.get("updated_at") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
 
-    base_cte = f"""
-        WITH base AS (
-            SELECT
-                c.id          AS company_id,
-                c.name        AS company_name,
-                c.industry,
-                c.state,
-                COALESCE(c.site_count, 0)      AS site_count,
-                COALESCE(c.employee_count, 0)  AS employee_count,
-                COALESCE(cf.estimated_total_spend, 0.0) AS estimated_total_spend,
-                COALESCE(cf.savings_low,  0.0) AS savings_low,
-                COALESCE(cf.savings_mid,  0.0) AS savings_mid,
-                COALESCE(cf.savings_high, 0.0) AS savings_high,
-                COALESCE(ls.score, 0.0)        AS score,
-                COALESCE(ls.tier, 'low')       AS tier,
-                COALESCE(ls.score_reason, '')  AS score_reason,
-                COALESCE(ls.approved_human, false) AS approved_human,
-                ls.approved_by,
-                ls.approved_at,
-                COALESCE(c.status, 'new')      AS status,
-                EXISTS (
-                    SELECT 1 FROM contacts ct
-                    WHERE ct.company_id = c.id
-                      AND ct.unsubscribed = false
-                )                              AS contact_found,
-                ls.scored_at                   AS date_scored,
-                c.updated_at
-            FROM companies c
-            LEFT JOIN LATERAL (
-                SELECT estimated_total_spend, savings_low, savings_mid, savings_high
-                FROM company_features
-                WHERE company_id = c.id
-                ORDER BY computed_at DESC
-                LIMIT 1
-            ) cf ON true
-            LEFT JOIN LATERAL (
-                SELECT score, tier, score_reason, approved_human,
-                       approved_by, approved_at, scored_at
-                FROM lead_scores
-                WHERE company_id = c.id
-                ORDER BY scored_at DESC
-                LIMIT 1
-            ) ls ON true
-            WHERE {where}
-        )
-    """
+    total = len(rows)
+    high = sum(1 for row in rows if row.get("tier") == TIER_HIGH)
+    medium = sum(1 for row in rows if row.get("tier") == TIER_MEDIUM)
+    low = sum(1 for row in rows if row.get("tier") not in {TIER_HIGH, TIER_MEDIUM})
 
-    count_sql = base_cte + """
-        SELECT
-            COUNT(*)                                          AS total_count,
-            COUNT(*) FILTER (WHERE tier = 'high')            AS high_count,
-            COUNT(*) FILTER (WHERE tier = 'medium')          AS medium_count,
-            COUNT(*) FILTER (WHERE tier NOT IN ('high','medium')) AS low_count
-        FROM base
-    """
-    cr = db.execute(text(count_sql), params).mappings().first() or {}
-    total  = int(cr.get("total_count") or 0)
-    high   = int(cr.get("high_count")  or 0)
-    medium = int(cr.get("medium_count") or 0)
-    low    = int(cr.get("low_count")   or 0)
-
-    page      = max(1, filters.page)
+    page = max(1, filters.page)
     page_size = max(1, min(100, filters.page_size))
-    offset    = (page - 1) * page_size
-
-    data_params = {**params, "limit": page_size, "offset": offset}
-    data_sql = base_cte + f"""
-        SELECT * FROM base
-        ORDER BY {order_by}
-        LIMIT :limit OFFSET :offset
-    """
-    rows = db.execute(text(data_sql), data_params).mappings().all()
-    return total, high, medium, low, [dict(r) for r in rows]
+    offset = (page - 1) * page_size
+    return total, high, medium, low, rows[offset: offset + page_size]
 
 
 # ---------------------------------------------------------------------------
@@ -263,61 +269,18 @@ def list_leads(
 def get_lead(company_id: UUID, db: Session = Depends(get_db)) -> LeadResponse:
     """Return full lead details for a single company."""
     settings = get_settings()
-    fee = float(getattr(settings, "TB_CONTINGENCY_FEE", 0.24) or 0.24)
+    fee = float(settings.TB_CONTINGENCY_FEE or 0.0)
 
-    row = db.execute(
-        text(
-            """
-            SELECT
-                c.id          AS company_id,
-                c.name        AS company_name,
-                c.industry,
-                c.state,
-                COALESCE(c.site_count, 0)               AS site_count,
-                COALESCE(c.employee_count, 0)           AS employee_count,
-                COALESCE(cf.estimated_total_spend, 0.0) AS estimated_total_spend,
-                COALESCE(cf.savings_low,  0.0)          AS savings_low,
-                COALESCE(cf.savings_mid,  0.0)          AS savings_mid,
-                COALESCE(cf.savings_high, 0.0)          AS savings_high,
-                COALESCE(ls.score, 0.0)                 AS score,
-                COALESCE(ls.tier, 'low')                AS tier,
-                COALESCE(ls.score_reason, '')           AS score_reason,
-                COALESCE(ls.approved_human, false)      AS approved_human,
-                ls.approved_by,
-                ls.approved_at,
-                COALESCE(c.status, 'new')               AS status,
-                EXISTS (
-                    SELECT 1 FROM contacts ct
-                    WHERE ct.company_id = c.id
-                      AND ct.unsubscribed = false
-                )                                       AS contact_found,
-                ls.scored_at                            AS date_scored
-            FROM companies c
-            LEFT JOIN LATERAL (
-                SELECT estimated_total_spend, savings_low, savings_mid, savings_high
-                FROM company_features
-                WHERE company_id = c.id
-                ORDER BY computed_at DESC
-                LIMIT 1
-            ) cf ON true
-            LEFT JOIN LATERAL (
-                SELECT score, tier, score_reason, approved_human,
-                       approved_by, approved_at, scored_at
-                FROM lead_scores
-                WHERE company_id = c.id
-                ORDER BY scored_at DESC
-                LIMIT 1
-            ) ls ON true
-            WHERE c.id = :company_id
-            """
-        ),
-        {"company_id": str(company_id)},
-    ).mappings().first()
+    company = db.execute(
+        select(Company).where(Company.id == company_id)
+    ).scalar_one_or_none()
 
-    if not row:
+    if not company:
+        logger.warning("Lead lookup failed; company_id=%s not found", company_id)
         raise HTTPException(status_code=404, detail=f"Lead {company_id} not found.")
 
-    return _build_lead_row(dict(row), fee)
+    row = _row_from_models(db, company, _latest_feature(db, company_id), _latest_score(db, company_id))
+    return _build_lead_row(row, fee)
 
 
 @router.patch("/{company_id}/approve")
@@ -327,46 +290,26 @@ def approve_lead(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Approve a lead: marks lead_scores and sets company status to 'approved'."""
-    score_row = db.execute(
-        text(
-            """
-            SELECT id FROM lead_scores
-            WHERE company_id = :company_id
-            ORDER BY scored_at DESC
-            LIMIT 1
-            """
-        ),
-        {"company_id": str(company_id)},
-    ).mappings().first()
+    score_row = _latest_score(db, company_id)
 
     if not score_row:
+        logger.warning("Lead approval failed; no lead score found for company_id=%s", company_id)
         raise HTTPException(
             status_code=404,
             detail=f"No lead score found for company {company_id}.",
         )
 
-    db.execute(
-        text(
-            """
-            UPDATE lead_scores
-            SET approved_human = true,
-                approved_by    = :approved_by,
-                approved_at    = NOW()
-            WHERE id = :score_id
-            """
-        ),
-        {"approved_by": body.approved_by, "score_id": str(score_row["id"])},
-    )
-    db.execute(
-        text(
-            """
-            UPDATE companies
-            SET status = 'approved', updated_at = NOW()
-            WHERE id = :company_id
-            """
-        ),
-        {"company_id": str(company_id)},
-    )
+    score_row.approved_human = True
+    score_row.approved_by = body.approved_by
+    score_row.approved_at = datetime.now(timezone.utc)
+
+    company = db.execute(
+        select(Company).where(Company.id == company_id)
+    ).scalar_one_or_none()
+    if company is not None:
+        company.status = STATUS_APPROVED
+        company.updated_at = datetime.now(timezone.utc)
+
     db.commit()
 
     logger.info("Lead %s approved by %s", company_id, body.approved_by)
@@ -380,26 +323,19 @@ def reject_lead(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Reject a lead: clears approval flag and archives the company."""
-    db.execute(
-        text(
-            """
-            UPDATE lead_scores
-            SET approved_human = false
-            WHERE company_id = :company_id
-            """
-        ),
-        {"company_id": str(company_id)},
-    )
-    db.execute(
-        text(
-            """
-            UPDATE companies
-            SET status = 'archived', updated_at = NOW()
-            WHERE id = :company_id
-            """
-        ),
-        {"company_id": str(company_id)},
-    )
+    score_rows = db.execute(
+        select(LeadScore).where(LeadScore.company_id == company_id)
+    ).scalars().all()
+    for score_row in score_rows:
+        score_row.approved_human = False
+
+    company = db.execute(
+        select(Company).where(Company.id == company_id)
+    ).scalar_one_or_none()
+    if company is not None:
+        company.status = STATUS_ARCHIVED
+        company.updated_at = datetime.now(timezone.utc)
+
     db.commit()
 
     logger.info(

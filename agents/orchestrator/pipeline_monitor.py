@@ -17,14 +17,16 @@ Usage:
 - Call these functions from dashboards, scheduled checks, or admin endpoints.
 """
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
-from sqlalchemy import text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from config.settings import get_settings
 from database.connection import check_connection
+from database.orm_models import Company, CompanyFeature, Contact, EmailDraft, LeadScore, OutreachEvent
 
 _EXPECTED_STATUSES = [
     "new",
@@ -43,49 +45,52 @@ _EXPECTED_STATUSES = [
 
 def get_pipeline_counts(db_session: Session) -> dict[str, int]:
     """Return count of companies grouped by status with zero-filled defaults."""
-    rows = db_session.execute(
-        text(
-            """
-            SELECT COALESCE(status, 'new') AS status, COUNT(*) AS count
-            FROM companies
-            GROUP BY COALESCE(status, 'new')
-            """
-        )
-    ).mappings().all()
+    all_statuses: list[str | None] = db_session.execute(
+        select(Company.status)
+    ).scalars().all()
 
     counts: dict[str, int] = {status: 0 for status in _EXPECTED_STATUSES}
-    for row in rows:
-        status = str(row.get("status") or "new").strip().lower()
-        counts[status] = int(row.get("count") or 0)
+    for raw in all_statuses:
+        key = (raw or "new").strip().lower()
+        if key in counts:
+            counts[key] += 1
 
     return counts
 
 
 def get_pipeline_value(db_session: Session) -> dict[str, Any]:
     """Return high-tier pipeline savings totals and estimated TB revenue."""
-    row = db_session.execute(
-        text(
-            """
-            SELECT
-                COUNT(DISTINCT c.id) AS total_leads_high,
-                COALESCE(SUM(cf.savings_low), 0) AS total_savings_low,
-                COALESCE(SUM(cf.savings_mid), 0) AS total_savings_mid,
-                COALESCE(SUM(cf.savings_high), 0) AS total_savings_high
-            FROM companies c
-            JOIN lead_scores ls
-                ON ls.company_id = c.id
-            JOIN company_features cf
-                ON cf.company_id = c.id
-            WHERE ls.tier = 'high'
-              AND COALESCE(c.status, '') NOT IN ('lost', 'archived', 'no_response')
-            """
-        )
-    ).mappings().first()
+    _excluded = ["lost", "archived", "no_response"]
+    active_companies: list[Company] = list(db_session.execute(
+        select(Company).where(Company.status.not_in(_excluded))
+    ).scalars().all())
 
-    total_leads_high = int((row or {}).get("total_leads_high") or 0)
-    total_savings_low = float((row or {}).get("total_savings_low") or 0.0)
-    total_savings_mid = float((row or {}).get("total_savings_mid") or 0.0)
-    total_savings_high = float((row or {}).get("total_savings_high") or 0.0)
+    total_leads_high = 0
+    total_savings_low = 0.0
+    total_savings_mid = 0.0
+    total_savings_high = 0.0
+
+    for company in active_companies:
+        latest_score: LeadScore | None = db_session.execute(
+            select(LeadScore)
+            .where(LeadScore.company_id == company.id)
+            .order_by(LeadScore.scored_at.desc())
+            .limit(1)
+        ).scalar()
+        if not latest_score or latest_score.tier != "high":
+            continue
+
+        total_leads_high += 1
+        latest_feature: CompanyFeature | None = db_session.execute(
+            select(CompanyFeature)
+            .where(CompanyFeature.company_id == company.id)
+            .order_by(CompanyFeature.computed_at.desc())
+            .limit(1)
+        ).scalar()
+        if latest_feature:
+            total_savings_low += float(latest_feature.savings_low or 0.0)
+            total_savings_mid += float(latest_feature.savings_mid or 0.0)
+            total_savings_high += float(latest_feature.savings_high or 0.0)
 
     contingency_fee = float(getattr(get_settings(), "TB_CONTINGENCY_FEE", 0.24) or 0.24)
     total_tb_revenue_est = total_savings_mid * contingency_fee
@@ -120,71 +125,60 @@ def detect_stuck_pipeline(db_session: Session) -> list[str]:
     """Return human-readable issue strings for stalled pipeline conditions."""
     issues: list[str] = []
 
-    new_over_24h = db_session.execute(
-        text(
-            """
-            SELECT COUNT(*)
-            FROM companies
-            WHERE COALESCE(status, 'new') = 'new'
-              AND created_at < (NOW() - INTERVAL '24 hours')
-            """
+    cutoff_24h = datetime.now(timezone.utc) - timedelta(hours=24)
+    new_count = int(db_session.execute(
+        select(func.count(Company.id)).where(
+            (Company.status.is_(None)) | (Company.status == "new"),
+            Company.created_at < cutoff_24h,
         )
-    ).scalar_one()
-    new_count = int(new_over_24h or 0)
+    ).scalar_one() or 0)
     if new_count > 0:
         issues.append(f"{new_count} companies found but not yet analyzed")
 
-    high_waiting_approval = db_session.execute(
-        text(
-            """
-            SELECT COUNT(*)
-            FROM lead_scores ls
-            JOIN companies c
-                ON c.id = ls.company_id
-            WHERE COALESCE(c.status, '') = 'scored'
-              AND COALESCE(ls.tier, '') = 'high'
-              AND COALESCE(ls.approved_human, false) = false
-              AND ls.scored_at < (NOW() - INTERVAL '48 hours')
-            """
+    cutoff_48h = datetime.now(timezone.utc) - timedelta(hours=48)
+    high_waiting_count = int(db_session.execute(
+        select(func.count(LeadScore.id))
+        .join(Company, Company.id == LeadScore.company_id)
+        .where(
+            Company.status == "scored",
+            LeadScore.tier == "high",
+            (LeadScore.approved_human == False) | (LeadScore.approved_human.is_(None)),  # noqa: E712
+            LeadScore.scored_at < cutoff_48h,
         )
-    ).scalar_one()
-    high_waiting_count = int(high_waiting_approval or 0)
+    ).scalar_one() or 0)
     if high_waiting_count > 0:
         issues.append(f"{high_waiting_count} high-score leads waiting approval")
 
-    approved_unsent = db_session.execute(
-        text(
-            """
-            SELECT COUNT(*)
-            FROM email_drafts d
-            LEFT JOIN outreach_events oe
-                ON oe.email_draft_id = d.id
-               AND oe.event_type IN ('sent', 'followup_sent')
-            WHERE d.approved_human = true
-              AND d.created_at < (NOW() - INTERVAL '6 hours')
-              AND oe.id IS NULL
-            """
+    cutoff_6h = datetime.now(timezone.utc) - timedelta(hours=6)
+    approved_drafts = db_session.execute(
+        select(EmailDraft.id).where(
+            EmailDraft.approved_human == True,  # noqa: E712
+            EmailDraft.created_at < cutoff_6h,
         )
-    ).scalar_one()
-    approved_unsent_count = int(approved_unsent or 0)
+    ).scalars().all()
+    approved_unsent_count = 0
+    for draft_id in approved_drafts:
+        sent_exists = db_session.execute(
+            select(OutreachEvent.id).where(
+                OutreachEvent.email_draft_id == draft_id,
+                OutreachEvent.event_type.in_(["sent", "followup_sent"]),
+            ).limit(1)
+        ).scalar()
+        if sent_exists is None:
+            approved_unsent_count += 1
     if approved_unsent_count > 0:
         issues.append(f"{approved_unsent_count} approved emails not yet sent")
 
-    weekday = db_session.execute(text("SELECT EXTRACT(ISODOW FROM NOW())")).scalar_one()
-    is_weekday = int(float(weekday or 0)) in {1, 2, 3, 4, 5}
-
-    sent_today = db_session.execute(
-        text(
-            """
-            SELECT COUNT(*)
-            FROM outreach_events
-            WHERE event_type = 'sent'
-              AND event_at >= date_trunc('day', NOW())
-            """
+    is_weekday = datetime.now(timezone.utc).isoweekday() in {1, 2, 3, 4, 5}
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    sent_today = int(db_session.execute(
+        select(func.count(OutreachEvent.id)).where(
+            OutreachEvent.event_type == "sent",
+            OutreachEvent.event_at >= today_start,
         )
-    ).scalar_one()
+    ).scalar_one() or 0)
 
-    if is_weekday and int(sent_today or 0) == 0:
+    if is_weekday and sent_today == 0:
         issues.append("No emails sent today — check outreach agent")
 
     return issues
@@ -193,27 +187,23 @@ def detect_stuck_pipeline(db_session: Session) -> list[str]:
 def get_recent_activity(db_session: Session, limit: int = 10) -> list[dict[str, Any]]:
     """Return latest outreach activity events with company and contact names."""
     safe_limit = max(1, int(limit))
-    rows = db_session.execute(
-        text(
-            """
-            SELECT
-                oe.event_at AS timestamp,
-                c.name AS company_name,
-                ct.full_name AS contact_name,
-                oe.event_type
-            FROM outreach_events oe
-            LEFT JOIN companies c
-                ON c.id = oe.company_id
-            LEFT JOIN contacts ct
-                ON ct.id = oe.contact_id
-            ORDER BY oe.event_at DESC
-            LIMIT :limit
-            """
-        ),
-        {"limit": safe_limit},
-    ).mappings().all()
+    events: list[OutreachEvent] = list(db_session.execute(
+        select(OutreachEvent)
+        .order_by(OutreachEvent.event_at.desc())
+        .limit(safe_limit)
+    ).scalars().all())
 
-    return [dict(row) for row in rows]
+    result: list[dict[str, Any]] = []
+    for event in events:
+        company = db_session.get(Company, event.company_id) if event.company_id else None
+        contact = db_session.get(Contact, event.contact_id) if event.contact_id else None
+        result.append({
+            "timestamp": event.event_at,
+            "company_name": str(company.name or "") if company else "",
+            "contact_name": str(contact.full_name or "") if contact else "",
+            "event_type": str(event.event_type or ""),
+        })
+    return result
 
 
 def _probe_url(url: str) -> dict[str, str]:

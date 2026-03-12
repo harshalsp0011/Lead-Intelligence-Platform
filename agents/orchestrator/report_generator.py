@@ -19,10 +19,11 @@ Usage:
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from agents.orchestrator import pipeline_monitor
+from database.orm_models import Company, CompanyFeature, LeadScore, OutreachEvent
 
 
 def generate_weekly_report(
@@ -53,44 +54,29 @@ def count_companies_found(
     """Return total discovered companies and grouped counts by industry/state."""
     start_dt, end_dt = _date_bounds(start_date, end_date)
 
+    _date_filter = (Company.date_found >= start_dt, Company.date_found <= end_dt)
     total = db_session.execute(
-        text(
-            """
-            SELECT COUNT(*)
-            FROM companies
-            WHERE date_found >= :start_dt
-              AND date_found <= :end_dt
-            """
-        ),
-        {"start_dt": start_dt, "end_dt": end_dt},
+        select(func.count(Company.id)).where(*_date_filter)
     ).scalar_one()
 
     industry_rows = db_session.execute(
-        text(
-            """
-            SELECT COALESCE(industry, 'unknown') AS industry, COUNT(*) AS count
-            FROM companies
-            WHERE date_found >= :start_dt
-              AND date_found <= :end_dt
-            GROUP BY COALESCE(industry, 'unknown')
-            ORDER BY COUNT(*) DESC
-            """
-        ),
-        {"start_dt": start_dt, "end_dt": end_dt},
+        select(
+            func.coalesce(Company.industry, "unknown").label("industry"),
+            func.count(Company.id).label("count"),
+        )
+        .where(*_date_filter)
+        .group_by(func.coalesce(Company.industry, "unknown"))
+        .order_by(func.count(Company.id).desc())
     ).mappings().all()
 
     state_rows = db_session.execute(
-        text(
-            """
-            SELECT COALESCE(state, 'unknown') AS state, COUNT(*) AS count
-            FROM companies
-            WHERE date_found >= :start_dt
-              AND date_found <= :end_dt
-            GROUP BY COALESCE(state, 'unknown')
-            ORDER BY COUNT(*) DESC
-            """
-        ),
-        {"start_dt": start_dt, "end_dt": end_dt},
+        select(
+            func.coalesce(Company.state, "unknown").label("state"),
+            func.count(Company.id).label("count"),
+        )
+        .where(*_date_filter)
+        .group_by(func.coalesce(Company.state, "unknown"))
+        .order_by(func.count(Company.id).desc())
     ).mappings().all()
 
     return {
@@ -109,16 +95,12 @@ def count_leads_by_tier(
     start_dt, end_dt = _date_bounds(start_date, end_date)
 
     rows = db_session.execute(
-        text(
-            """
-            SELECT COALESCE(tier, 'low') AS tier, COUNT(*) AS count
-            FROM lead_scores
-            WHERE scored_at >= :start_dt
-              AND scored_at <= :end_dt
-            GROUP BY COALESCE(tier, 'low')
-            """
-        ),
-        {"start_dt": start_dt, "end_dt": end_dt},
+        select(
+            func.coalesce(LeadScore.tier, "low").label("tier"),
+            func.count(LeadScore.id).label("count"),
+        )
+        .where(LeadScore.scored_at >= start_dt, LeadScore.scored_at <= end_dt)
+        .group_by(func.coalesce(LeadScore.tier, "low"))
     ).mappings().all()
 
     result = {"high": 0, "medium": 0, "low": 0}
@@ -141,17 +123,16 @@ def count_emails_sent(
     start_dt, end_dt = _date_bounds(start_date, end_date)
 
     rows = db_session.execute(
-        text(
-            """
-            SELECT event_type, COUNT(*) AS count
-            FROM outreach_events
-            WHERE event_at >= :start_dt
-              AND event_at <= :end_dt
-              AND event_type IN ('sent', 'followup_sent', 'opened', 'clicked')
-            GROUP BY event_type
-            """
-        ),
-        {"start_dt": start_dt, "end_dt": end_dt},
+        select(
+            OutreachEvent.event_type.label("event_type"),
+            func.count(OutreachEvent.id).label("count"),
+        )
+        .where(
+            OutreachEvent.event_at >= start_dt,
+            OutreachEvent.event_at <= end_dt,
+            OutreachEvent.event_type.in_(["sent", "followup_sent", "opened", "clicked"]),
+        )
+        .group_by(OutreachEvent.event_type)
     ).mappings().all()
 
     counts = {str(row["event_type"]): int(row["count"] or 0) for row in rows}
@@ -182,57 +163,38 @@ def count_replies_received(
     """Return reply sentiment totals, unsubscribe count, and reply rate."""
     start_dt, end_dt = _date_bounds(start_date, end_date)
 
+    _reply_filter = (
+        OutreachEvent.event_type == "replied",
+        OutreachEvent.event_at >= start_dt,
+        OutreachEvent.event_at <= end_dt,
+    )
     sentiment_rows = db_session.execute(
-        text(
-            """
-            SELECT COALESCE(reply_sentiment, 'neutral') AS sentiment, COUNT(*) AS count
-            FROM outreach_events
-            WHERE event_type = 'replied'
-              AND event_at >= :start_dt
-              AND event_at <= :end_dt
-            GROUP BY COALESCE(reply_sentiment, 'neutral')
-            """
-        ),
-        {"start_dt": start_dt, "end_dt": end_dt},
+        select(
+            func.coalesce(OutreachEvent.reply_sentiment, "neutral").label("sentiment"),
+            func.count(OutreachEvent.id).label("count"),
+        )
+        .where(*_reply_filter)
+        .group_by(func.coalesce(OutreachEvent.reply_sentiment, "neutral"))
     ).mappings().all()
 
     replies_total = db_session.execute(
-        text(
-            """
-            SELECT COUNT(*)
-            FROM outreach_events
-            WHERE event_type = 'replied'
-              AND event_at >= :start_dt
-              AND event_at <= :end_dt
-            """
-        ),
-        {"start_dt": start_dt, "end_dt": end_dt},
+        select(func.count(OutreachEvent.id)).where(*_reply_filter)
     ).scalar_one()
 
     unsubscribes = db_session.execute(
-        text(
-            """
-            SELECT COUNT(*)
-            FROM outreach_events
-            WHERE event_type = 'unsubscribed'
-              AND event_at >= :start_dt
-              AND event_at <= :end_dt
-            """
-        ),
-        {"start_dt": start_dt, "end_dt": end_dt},
+        select(func.count(OutreachEvent.id)).where(
+            OutreachEvent.event_type == "unsubscribed",
+            OutreachEvent.event_at >= start_dt,
+            OutreachEvent.event_at <= end_dt,
+        )
     ).scalar_one()
 
     sent_total = db_session.execute(
-        text(
-            """
-            SELECT COUNT(*)
-            FROM outreach_events
-            WHERE event_type IN ('sent', 'followup_sent')
-              AND event_at >= :start_dt
-              AND event_at <= :end_dt
-            """
-        ),
-        {"start_dt": start_dt, "end_dt": end_dt},
+        select(func.count(OutreachEvent.id)).where(
+            OutreachEvent.event_type.in_(["sent", "followup_sent"]),
+            OutreachEvent.event_at >= start_dt,
+            OutreachEvent.event_at <= end_dt,
+        )
     ).scalar_one()
 
     sentiment_counts = {"positive": 0, "neutral": 0, "negative": 0}
@@ -271,48 +233,44 @@ def get_top_leads(limit: int, db_session: Session) -> list[dict[str, Any]]:
     """Return top high-tier active leads ordered by score descending."""
     safe_limit = max(1, int(limit))
 
-    rows = db_session.execute(
-        text(
-            """
-            SELECT
-                c.name AS company_name,
-                c.industry,
-                ls.score,
-                ls.tier,
-                c.status,
-                cf.savings_low,
-                cf.savings_high
-            FROM companies c
-            JOIN lead_scores ls
-                ON ls.company_id = c.id
-            JOIN company_features cf
-                ON cf.company_id = c.id
-            WHERE ls.tier = 'high'
-              AND COALESCE(c.status, '') NOT IN ('lost', 'archived', 'no_response')
-            ORDER BY ls.score DESC
-            LIMIT :limit
-            """
-        ),
-        {"limit": safe_limit},
-    ).mappings().all()
+    _excluded: set[str] = {"lost", "archived", "no_response"}
+    active_companies: list[Company] = list(db_session.execute(
+        select(Company).where(Company.status.not_in(list(_excluded)))
+    ).scalars().all())
 
     top_leads: list[dict[str, Any]] = []
-    for row in rows:
-        savings_low = float(row.get("savings_low") or 0.0)
-        savings_high = float(row.get("savings_high") or 0.0)
+    for company in active_companies:
+        latest_score: LeadScore | None = db_session.execute(
+            select(LeadScore)
+            .where(LeadScore.company_id == company.id)
+            .order_by(LeadScore.scored_at.desc())
+            .limit(1)
+        ).scalar()
+        if not latest_score or latest_score.tier != "high":
+            continue
 
+        latest_feature: CompanyFeature | None = db_session.execute(
+            select(CompanyFeature)
+            .where(CompanyFeature.company_id == company.id)
+            .order_by(CompanyFeature.computed_at.desc())
+            .limit(1)
+        ).scalar()
+
+        savings_low = float(latest_feature.savings_low or 0.0) if latest_feature else 0.0
+        savings_high = float(latest_feature.savings_high or 0.0) if latest_feature else 0.0
         top_leads.append(
             {
-                "company_name": str(row.get("company_name") or ""),
-                "industry": str(row.get("industry") or ""),
-                "score": float(row.get("score") or 0.0),
-                "tier": str(row.get("tier") or ""),
+                "company_name": str(company.name or ""),
+                "industry": str(company.industry or ""),
+                "score": float(latest_score.score or 0.0),
+                "tier": str(latest_score.tier or ""),
                 "savings_formatted": f"{_fmt_currency(savings_low)} - {_fmt_currency(savings_high)}",
-                "status": str(row.get("status") or ""),
+                "status": str(company.status or ""),
             }
         )
 
-    return top_leads
+    top_leads.sort(key=lambda x: x["score"], reverse=True)
+    return top_leads[:safe_limit]
 
 
 def _date_bounds(start_date: date | datetime | str, end_date: date | datetime | str) -> tuple[datetime, datetime]:

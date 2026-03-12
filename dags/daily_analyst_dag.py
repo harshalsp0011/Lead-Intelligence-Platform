@@ -28,7 +28,7 @@ from typing import Any, Iterator
 import requests
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
-from sqlalchemy import text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +39,7 @@ from agents.analyst import enrichment_client
 from agents.orchestrator import orchestrator
 from config.settings import get_settings
 from database.connection import SessionLocal
+from database.orm_models import Company, CompanyFeature, LeadScore
 
 logger = logging.getLogger(__name__)
 
@@ -86,27 +87,31 @@ def _format_currency(value: float) -> str:
 
 def _calculate_pipeline_value(db_session: Session) -> dict[str, Any]:
     """Fetch high-tier pipeline value metrics."""
-    row = db_session.execute(
-        text(
-            """
-            SELECT
-                COUNT(DISTINCT c.id) AS total_leads_high,
-                COALESCE(SUM(cf.savings_low), 0) AS total_savings_low,
-                COALESCE(SUM(cf.savings_mid), 0) AS total_savings_mid,
-                COALESCE(SUM(cf.savings_high), 0) AS total_savings_high
-            FROM companies c
-            JOIN lead_scores ls
-                ON ls.company_id = c.id
-            JOIN company_features cf
-                ON cf.company_id = c.id
-            WHERE ls.tier = 'high'
-              AND COALESCE(c.status, '') NOT IN ('lost', 'archived', 'no_response')
-            """.strip()
-        )
-    ).mappings().first()
+    _excluded = ["lost", "archived", "no_response"]
+    active_companies: list[Company] = list(db_session.execute(
+        select(Company).where(Company.status.not_in(_excluded))
+    ).scalars().all())
 
-    total_leads_high = int((row or {}).get("total_leads_high") or 0)
-    total_savings_mid = float((row or {}).get("total_savings_mid") or 0.0)
+    total_leads_high = 0
+    total_savings_mid = 0.0
+    for company in active_companies:
+        latest_score: LeadScore | None = db_session.execute(
+            select(LeadScore)
+            .where(LeadScore.company_id == company.id)
+            .order_by(LeadScore.scored_at.desc())
+            .limit(1)
+        ).scalar()
+        if not latest_score or latest_score.tier != "high":
+            continue
+        total_leads_high += 1
+        latest_feature: CompanyFeature | None = db_session.execute(
+            select(CompanyFeature)
+            .where(CompanyFeature.company_id == company.id)
+            .order_by(CompanyFeature.computed_at.desc())
+            .limit(1)
+        ).scalar()
+        if latest_feature:
+            total_savings_mid += float(latest_feature.savings_mid or 0.0)
 
     settings = get_settings()
     contingency_fee = float(getattr(settings, "TB_CONTINGENCY_FEE", 0.24) or 0.24)
@@ -122,13 +127,9 @@ def _calculate_pipeline_value(db_session: Session) -> dict[str, Any]:
 def _count_pending_approval(db_session: Session) -> int:
     """Count high-tier leads waiting human approval."""
     result = db_session.execute(
-        text(
-            """
-            SELECT COUNT(DISTINCT ls.company_id)
-            FROM lead_scores ls
-            WHERE ls.tier = 'high'
-              AND COALESCE(ls.approved_human, false) = false
-            """.strip()
+        select(func.count(func.distinct(LeadScore.company_id))).where(
+            LeadScore.tier == "high",
+            (LeadScore.approved_human == False) | (LeadScore.approved_human.is_(None)),  # noqa: E712
         )
     ).scalar_one()
     return int(result or 0)
@@ -137,19 +138,16 @@ def _count_pending_approval(db_session: Session) -> int:
 def fetch_unscored_companies(**context: Any) -> list[str]:
     """Fetch companies marked as new or enriched for scoring."""
     with db_session_scope() as db_session:
-        rows = db_session.execute(
-            text(
-                """
-                SELECT id
-                FROM companies
-                WHERE COALESCE(status, 'new') IN ('new', 'enriched')
-                ORDER BY created_at ASC
-                LIMIT 1000
-                """.strip()
-            )
-        ).scalars().all()
-
-        company_ids = [str(company_id) for company_id in rows]
+        company_ids: list[str] = [
+            str(cid) for cid in db_session.execute(
+                select(Company.id)
+                .where(
+                    (Company.status.is_(None)) | (Company.status.in_(["new", "enriched"]))
+                )
+                .order_by(Company.created_at.asc())
+                .limit(1000)
+            ).scalars().all()
+        ]
 
     task_instance = context["ti"]
     task_instance.xcom_push(key=UNSCORED_COMPANY_IDS_XCOM_KEY, value=company_ids)
@@ -197,21 +195,18 @@ def filter_high_score_leads(**context: Any) -> list[str]:
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
     with db_session_scope() as db_session:
-        rows = db_session.execute(
-            text(
-                """
-                SELECT DISTINCT ls.company_id
-                FROM lead_scores ls
-                WHERE ls.tier = 'high'
-                  AND COALESCE(ls.approved_human, false) = false
-                  AND ls.scored_at >= :today_start
-                ORDER BY ls.scored_at DESC
-                """.strip()
-            ),
-            {"today_start": today_start},
-        ).scalars().all()
-
-        company_ids = [str(company_id) for company_id in rows]
+        company_ids = [
+            str(cid) for cid in db_session.execute(
+                select(LeadScore.company_id)
+                .where(
+                    LeadScore.tier == "high",
+                    (LeadScore.approved_human == False) | (LeadScore.approved_human.is_(None)),  # noqa: E712
+                    LeadScore.scored_at >= today_start,
+                )
+                .distinct()
+                .order_by(LeadScore.scored_at.desc())
+            ).scalars().all()
+        ]
 
     task_instance = context["ti"]
     task_instance.xcom_push(key=HIGH_SCORE_COMPANY_IDS_XCOM_KEY, value=company_ids)
@@ -237,21 +232,16 @@ def run_contact_enrichment(**context: Any) -> int:
     total_contacts = 0
 
     with db_session_scope() as db_session:
-        rows = db_session.execute(
-            text(
-                """
-                SELECT id, name, website
-                FROM companies
-                WHERE id IN :company_ids
-                """.strip()
-            ),
-            {"company_ids": company_ids},
-        ).mappings().all()
+        import uuid as _uuid  # noqa: PLC0415
+        parsed_ids = [_uuid.UUID(cid) for cid in company_ids if cid]
+        companies = db_session.execute(
+            select(Company).where(Company.id.in_(parsed_ids))
+        ).scalars().all()
 
-        for row in rows:
-            company_id = str(row.get("id") or "")
-            name = str(row.get("name") or "")
-            website = str(row.get("website") or "")
+        for company in companies:
+            company_id = str(company.id)
+            name = str(company.name or "")
+            website = str(company.website or "")
 
             try:
                 contacts = enrichment_client.find_contacts(
@@ -322,24 +312,21 @@ def notify_analyst_complete(**context: Any) -> None:
 def trigger_writer_task(**context: Any) -> None:
     """Run writer stage for approved high-tier leads with no email draft."""
     with db_session_scope() as db_session:
-        rows = db_session.execute(
-            text(
-                """
-                SELECT ls.company_id
-                FROM lead_scores ls
-                WHERE ls.tier = 'high'
-                  AND COALESCE(ls.approved_human, false) = true
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM email_drafts ed
-                      WHERE ed.company_id = ls.company_id
-                  )
-                ORDER BY ls.scored_at DESC
-                """.strip()
-            )
-        ).scalars().all()
-
-        approved_ids = [str(company_id) for company_id in rows]
+        from database.orm_models import EmailDraft  # noqa: PLC0415
+        approved_ids = [
+            str(cid) for cid in db_session.execute(
+                select(LeadScore.company_id)
+                .where(
+                    LeadScore.tier == "high",
+                    LeadScore.approved_human == True,  # noqa: E712
+                    ~select(EmailDraft.id)
+                    .where(EmailDraft.company_id == LeadScore.company_id)
+                    .correlate(LeadScore)
+                    .exists()
+                )
+                .order_by(LeadScore.scored_at.desc())
+            ).scalars().all()
+        ]
 
         if approved_ids:
             orchestrator.run_writer(db_session)

@@ -9,7 +9,7 @@ and run the SQL migration files in the database/migrations folder.
 
 from pathlib import Path
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from config.settings import get_settings
@@ -42,7 +42,7 @@ def check_connection() -> bool:
     """Return True when the database is reachable, otherwise False."""
     try:
         with engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
+            connection.execute(select(1))
         return True
     except Exception:
         return False

@@ -28,11 +28,13 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_db, verify_api_key
 from api.models.trigger import TriggerRequest, TriggerResponse, TriggerStatusResponse
 from database.connection import SessionLocal
+from database.orm_models import Company
 
 logger = logging.getLogger(__name__)
 
@@ -165,19 +167,15 @@ def trigger_analyst(
 ) -> TriggerResponse:
     """Run the analyst stage for all unscored companies in background."""
     from agents.orchestrator import orchestrator  # noqa: PLC0415
-    from sqlalchemy import text
 
     # Gather company IDs that need scoring.
-    rows = db.execute(
-        text(
-            """
-            SELECT id FROM companies
-            WHERE status IN ('new', 'enriched')
-            ORDER BY created_at
-            """
-        )
-    ).mappings().all()
-    company_ids: list[str] = [str(r["id"]) for r in rows]
+    company_ids: list[str] = [
+        str(cid) for cid in db.execute(
+            select(Company.id)
+            .where(Company.status.in_(["new", "enriched"]))
+            .order_by(Company.created_at.asc())
+        ).scalars().all()
+    ]
 
     trigger_id, started_at = _register(
         "analyst_only", {"company_ids_count": len(company_ids)}

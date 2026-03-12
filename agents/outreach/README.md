@@ -54,11 +54,16 @@ From config/settings.py:
 - SENDGRID_FROM_EMAIL
 - INSTANTLY_API_KEY (if using Instantly)
 - INSTANTLY_CAMPAIGN_ID (if using Instantly)
+- INSTANTLY_API_BASE_URL (optional override for Instantly API host)
+- INSTANTLY_REQUEST_TIMEOUT_SECONDS
 - EMAIL_DAILY_LIMIT
+- TB_BRAND_NAME
+- TB_OFFICE_LOCATION
+- UNSUBSCRIBE_INSTRUCTION
 
 ## Database Dependencies
 
-The sender reads/writes these tables:
+The sender and follow-up scheduler read/write these ORM-backed tables:
 - email_drafts
 - contacts
 - outreach_events
@@ -94,4 +99,5 @@ The sender reads/writes these tables:
 - The send_email function returns a compact result dict:
   - success: true/false
   - message_id: provider message id or error/skip reason
-- Instantly flow expects INSTANTLY_CAMPAIGN_ID to be available in environment/settings.
+- Instantly flow reads campaign/base URL/timeout settings from `config.settings`.
+- Follow-up intervals are configured centrally through `FOLLOWUP_DAY_3`, `FOLLOWUP_DAY_7`, and `FOLLOWUP_DAY_14`.

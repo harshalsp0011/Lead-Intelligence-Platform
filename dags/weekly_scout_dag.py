@@ -20,7 +20,6 @@ Usage:
 """
 
 import logging
-import os
 import sys
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -61,15 +60,11 @@ def db_session_scope() -> Iterator[Session]:
 
 
 def _read_setting_value(settings: Any, *names: str, default: Any = None) -> Any:
-    """Read a config value from settings first, then from the environment."""
+    """Read a config value from settings only, falling back to the provided default."""
     for name in names:
         value = getattr(settings, name, None)
         if value not in (None, ""):
             return value
-
-        env_value = os.getenv(name)
-        if env_value not in (None, ""):
-            return env_value
 
     return default
 
@@ -111,12 +106,13 @@ def _read_target_count(settings: Any) -> int:
         settings,
         "SCOUT_WEEKLY_TARGET_COUNT",
         "SCOUT_TARGET_COUNT",
-        default=20,
+        default=settings.SCOUT_WEEKLY_TARGET_COUNT,
     )
     try:
         return max(int(raw_value), 0)
     except (TypeError, ValueError):
-        return 20
+        logger.warning("Invalid weekly scout target count %r; using settings default", raw_value)
+        return int(settings.SCOUT_WEEKLY_TARGET_COUNT)
 
 
 def _coerce_logical_date(value: Any) -> datetime:

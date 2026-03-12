@@ -3,14 +3,25 @@ from __future__ import annotations
 """Main Writer Agent entry point for draft generation."""
 
 import logging
+import uuid
+from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from agents.analyst import enrichment_client
 from agents.writer import llm_connector, template_engine, tone_validator
 from config.settings import get_settings
+from database.orm_models import Company, CompanyFeature, EmailDraft, LeadScore
+
+
+def _parse_uuid(value: str, label: str = "id") -> uuid.UUID:
+    """Parse a UUID string; raises ValueError with a clear message on failure."""
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, AttributeError) as exc:
+        raise ValueError(f"Invalid {label}: {value!r}") from exc
 
 logger = logging.getLogger(__name__)
 
@@ -20,20 +31,14 @@ def run(company_ids: list[str], db_session: Session) -> list[str]:
     created_draft_ids: list[str] = []
 
     for company_id in company_ids:
-        lead_score = db_session.execute(
-            text(
-                """
-                SELECT id, approved_human
-                FROM lead_scores
-                WHERE company_id = :company_id
-                ORDER BY scored_at DESC
-                LIMIT 1
-                """
-            ),
-            {"company_id": company_id},
-        ).mappings().first()
+        lead_score: LeadScore | None = db_session.execute(
+            select(LeadScore)
+            .where(LeadScore.company_id == _parse_uuid(company_id, "company_id"))
+            .order_by(LeadScore.scored_at.desc())
+            .limit(1)
+        ).scalar()
 
-        if not lead_score or not bool(lead_score.get("approved_human")):
+        if not lead_score or not bool(lead_score.approved_human):
             continue
 
         try:
@@ -50,42 +55,22 @@ def run(company_ids: list[str], db_session: Session) -> list[str]:
 def process_one_company(company_id: str, db_session: Session) -> str | None:
     """Build and store one email draft for a single approved company."""
     # Step 1: load company, features, score from DB.
-    company = db_session.execute(
-        text(
-            """
-            SELECT id, name, website, industry, state, site_count
-            FROM companies
-            WHERE id = :company_id
-            """
-        ),
-        {"company_id": company_id},
-    ).mappings().first()
+    cid = _parse_uuid(company_id, "company_id")
+    company: Company | None = db_session.get(Company, cid)
 
-    features = db_session.execute(
-        text(
-            """
-            SELECT id, estimated_site_count, savings_low, savings_mid, savings_high
-            FROM company_features
-            WHERE company_id = :company_id
-            ORDER BY computed_at DESC
-            LIMIT 1
-            """
-        ),
-        {"company_id": company_id},
-    ).mappings().first()
+    features: CompanyFeature | None = db_session.execute(
+        select(CompanyFeature)
+        .where(CompanyFeature.company_id == cid)
+        .order_by(CompanyFeature.computed_at.desc())
+        .limit(1)
+    ).scalar()
 
-    score = db_session.execute(
-        text(
-            """
-            SELECT id, score, tier, approved_human
-            FROM lead_scores
-            WHERE company_id = :company_id
-            ORDER BY scored_at DESC
-            LIMIT 1
-            """
-        ),
-        {"company_id": company_id},
-    ).mappings().first()
+    score: LeadScore | None = db_session.execute(
+        select(LeadScore)
+        .where(LeadScore.company_id == cid)
+        .order_by(LeadScore.scored_at.desc())
+        .limit(1)
+    ).scalar()
 
     if not company or not features or not score:
         logger.warning("Missing company/features/score for company_id=%s", company_id)
@@ -164,17 +149,9 @@ def process_one_company(company_id: str, db_session: Session) -> str | None:
     )
 
     # Step 10: update company status.
-    db_session.execute(
-        text(
-            """
-            UPDATE companies
-            SET status = 'draft_created',
-                updated_at = NOW()
-            WHERE id = :company_id
-            """
-        ),
-        {"company_id": company_id},
-    )
+    if company is not None:
+        company.status = "draft_created"
+        company.updated_at = datetime.now(timezone.utc)
     db_session.commit()
 
     return draft_id
@@ -190,41 +167,20 @@ def save_draft(
     db_session: Session,
 ) -> str:
     """Insert one draft row with approved_human defaulting to false."""
-    inserted_id = db_session.execute(
-        text(
-            """
-            INSERT INTO email_drafts (
-                company_id,
-                contact_id,
-                subject_line,
-                body,
-                savings_estimate,
-                template_used,
-                approved_human
-            )
-            VALUES (
-                :company_id,
-                :contact_id,
-                :subject_line,
-                :body,
-                :savings_estimate,
-                :template_used,
-                false
-            )
-            RETURNING id
-            """
-        ),
-        {
-            "company_id": company_id,
-            "contact_id": contact_id,
-            "subject_line": subject,
-            "body": body,
-            "savings_estimate": savings_estimate,
-            "template_used": template_used,
-        },
-    ).scalar_one()
-
-    return str(inserted_id)
+    draft_id = uuid.uuid4()
+    draft = EmailDraft(
+        id=draft_id,
+        company_id=_parse_uuid(company_id, "company_id"),
+        contact_id=_parse_uuid(contact_id, "contact_id"),
+        subject_line=subject,
+        body=body,
+        savings_estimate=savings_estimate,
+        template_used=template_used,
+        approved_human=False,
+    )
+    db_session.add(draft)
+    db_session.flush()
+    return str(draft.id)
 
 
 def build_context(

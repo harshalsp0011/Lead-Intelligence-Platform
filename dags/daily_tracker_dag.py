@@ -31,7 +31,7 @@ from typing import Any, Iterator
 import requests
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
-from sqlalchemy import text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +42,7 @@ from agents.outreach import email_sender, followup_scheduler, sequence_manager
 from agents.tracker import status_updater, tracker_agent
 from config.settings import get_settings
 from database.connection import SessionLocal
+from database.orm_models import Company, OutreachEvent
 
 logger = logging.getLogger(__name__)
 
@@ -161,18 +162,13 @@ def send_due_followups(**context: Any) -> int:
                     continue
 
                 # Update outreach event
-                db_session.execute(
-                    text(
-                        """
-                        UPDATE outreach_events
-                        SET
-                            event_type = 'followup_sent',
-                            event_at = NOW()
-                        WHERE id = :event_id
-                        """.strip()
-                    ),
-                    {"event_id": event_id},
-                )
+                from database.orm_models import OutreachEvent as _OE  # noqa: PLC0415
+                import uuid as _uuid  # noqa: PLC0415
+                event_obj = db_session.get(_OE, _uuid.UUID(event_id)) if event_id else None
+                if event_obj is not None:
+                    event_obj.event_type = "followup_sent"
+                    from datetime import datetime as _dt, timezone as _tz  # noqa: PLC0415
+                    event_obj.event_at = _dt.now(_tz.utc)
                 db_session.commit()
 
                 # Schedule next followup if not on final round
@@ -180,22 +176,24 @@ def send_due_followups(**context: Any) -> int:
                     days_until_next = int(getattr(settings, f"FOLLOWUP_DAY_{follow_up_number + 1}", 0) or 0)
                     if days_until_next > 0:
                         next_date = datetime.now(timezone.utc) + timedelta(days=days_until_next)
-                        db_session.execute(
-                            text(
-                                """
-                                INSERT INTO outreach_events
-                                (company_id, contact_id, email_draft_id, event_type, follow_up_number, next_followup_date, event_at)
-                                VALUES (:company_id, :contact_id, :email_draft_id, 'scheduled_followup', :follow_up_number, :next_date, NOW())
-                                """.strip()
-                            ),
-                            {
-                                "company_id": company_id,
-                                "contact_id": followup_record.get("contact_id"),
-                                "email_draft_id": draft_id,
-                                "follow_up_number": follow_up_number + 1,
-                                "next_date": next_date,
-                            },
+                        import uuid as _uuid2  # noqa: PLC0415
+                        from database.orm_models import OutreachEvent as _OE2  # noqa: PLC0415
+                        from datetime import datetime as _dt2, timezone as _tz2  # noqa: PLC0415
+                        _cid = _uuid2.UUID(company_id) if company_id else None
+                        _ctid_raw = followup_record.get("contact_id")
+                        _ctid = _uuid2.UUID(str(_ctid_raw)) if _ctid_raw else None
+                        _did = _uuid2.UUID(draft_id) if draft_id else None
+                        next_event = _OE2(
+                            id=_uuid2.uuid4(),
+                            company_id=_cid,
+                            contact_id=_ctid,
+                            email_draft_id=_did,
+                            event_type="scheduled_followup",
+                            follow_up_number=follow_up_number + 1,
+                            next_followup_date=next_date.date(),
+                            event_at=_dt2.now(_tz2.utc),
                         )
+                        db_session.add(next_event)
                         db_session.commit()
                 elif follow_up_number == 3:
                     followup_scheduler.mark_sequence_complete(company_id, db_session)
@@ -268,23 +266,28 @@ def update_sequence_completions(**context: Any) -> int:
 
     with db_session_scope() as db_session:
         # Find final followups sent yesterday or earlier with no reply
+        replied_subq = (
+            select(OutreachEvent.id)
+            .where(
+                OutreachEvent.company_id == OutreachEvent.company_id,
+                OutreachEvent.event_type == "replied",
+            )
+        )
         rows = db_session.execute(
-            text(
-                """
-                SELECT DISTINCT oe.company_id
-                FROM outreach_events oe
-                WHERE oe.follow_up_number = 3
-                  AND oe.event_type = 'followup_sent'
-                  AND oe.event_at < :yesterday
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM outreach_events oe2
-                      WHERE oe2.company_id = oe.company_id
-                        AND oe2.event_type = 'replied'
-                  )
-                """.strip()
-            ),
-            {"yesterday": yesterday},
+            select(OutreachEvent.company_id)
+            .where(
+                OutreachEvent.follow_up_number == 3,
+                OutreachEvent.event_type == "followup_sent",
+                OutreachEvent.event_at < yesterday,
+                ~select(OutreachEvent.id)
+                .where(
+                    OutreachEvent.company_id == OutreachEvent.company_id,
+                    OutreachEvent.event_type == "replied",
+                )
+                .correlate_except(OutreachEvent)
+                .exists(),
+            )
+            .distinct()
         ).scalars().all()
 
         for company_id in rows:
@@ -331,43 +334,27 @@ def send_daily_summary(**context: Any) -> None:
     with db_session_scope() as db_session:
         # Count new replies received today
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        reply_count_result = db_session.execute(
-            text(
-                """
-                SELECT COUNT(DISTINCT company_id)
-                FROM outreach_events
-                WHERE event_type = 'replied'
-                  AND event_at >= :today_start
-                """.strip()
-            ),
-            {"today_start": today_start},
-        ).scalar_one()
-        reply_count = int(reply_count_result or 0)
+            reply_count = int(db_session.execute(
+                select(func.count(func.distinct(OutreachEvent.company_id))).where(
+                    OutreachEvent.event_type == "replied",
+                    OutreachEvent.event_at >= today_start,
+                )
+            ).scalar_one() or 0)
 
-        # Count hot leads (replied but not yet alerted)
-        hot_count_result = db_session.execute(
-            text(
-                """
-                SELECT COUNT(DISTINCT oe.company_id)
-                FROM outreach_events oe
-                WHERE oe.event_type = 'replied'
-                  AND COALESCE(oe.sales_alerted, false) = false
-                """.strip()
-            )
-        ).scalar_one()
-        hot_count = int(hot_count_result or 0)
+            # Count hot leads (replied but not yet alerted)
+            hot_count = int(db_session.execute(
+                select(func.count(func.distinct(OutreachEvent.company_id))).where(
+                    OutreachEvent.event_type == "replied",
+                    (OutreachEvent.sales_alerted == False) | (OutreachEvent.sales_alerted.is_(None)),  # noqa: E712
+                )
+            ).scalar_one() or 0)
 
-        # Count active leads in pipeline
-        active_count_result = db_session.execute(
-            text(
-                """
-                SELECT COUNT(DISTINCT id)
-                FROM companies
-                WHERE COALESCE(status, 'new') NOT IN ('lost', 'archived', 'no_response', 'won')
-                """.strip()
-            )
-        ).scalar_one()
-        active_count = int(active_count_result or 0)
+            # Count active leads in pipeline
+            active_count = int(db_session.execute(
+                select(func.count(func.distinct(Company.id))).where(
+                    Company.status.not_in(["lost", "archived", "no_response", "won"]),
+                )
+            ).scalar_one() or 0)
 
     today_str = datetime.now().strftime("%A, %B %d, %Y")
 

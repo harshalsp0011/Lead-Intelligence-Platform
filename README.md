@@ -141,6 +141,9 @@ The project reads configuration from `.env`. Use the Phase 1 column for local an
 | `DEPLOY_ENV` | Environment mode used by API auth and runtime behavior. | `local` | `production` | Required |
 | `APP_NAME` | Application name for logs and service identity. | `utility-lead-platform` | `utility-lead-platform` | Required |
 | `LOG_LEVEL` | Global logging verbosity. | `INFO` | `INFO` or `WARNING` | Optional |
+| `TB_BRAND_NAME` | Brand label used in outbound footer content. | `Troy & Banks` | `Troy & Banks` | Required |
+| `TB_OFFICE_LOCATION` | Office location shown in outbound footer content. | `Buffalo, NY` | production office location | Required |
+| `UNSUBSCRIBE_INSTRUCTION` | Standard unsubscribe instruction appended to outbound emails. | `To unsubscribe reply with STOP.` | compliance-approved production text | Required |
 | `LLM_PROVIDER` | Active LLM backend. | `ollama` | `openai` | Required |
 | `LLM_MODEL` | Model name used by the selected LLM provider. | `llama3.2` | `gpt-4o-mini` | Required |
 | `OLLAMA_BASE_URL` | Base URL for the local Ollama server. | `http://localhost:11434` | leave set only if Ollama retained | Optional |
@@ -153,6 +156,8 @@ The project reads configuration from `.env`. Use the Phase 1 column for local an
 | `BRIGHTDATA_KEY` | Bright Data key for scaled crawling. | blank | your Bright Data key | Optional in Phase 1, required in Phase 2 if using Bright Data |
 | `REQUEST_DELAY_SECONDS` | Delay between requests to reduce blocking risk. | `2` | `1` to `2` depending on provider policy | Optional |
 | `MAX_RETRIES` | Retry count for scraping/network operations. | `3` | `3` to `5` | Optional |
+| `SCRAPER_REQUEST_TIMEOUT_SECONDS` | Timeout for outbound directory fetch requests. | `30` | `30` to `60` | Optional |
+| `SCRAPER_USER_AGENT` | User-Agent header used for directory scraping. | browser-like default | managed production header | Optional |
 | `ENRICHMENT_PROVIDER` | Contact enrichment provider selector. | `hunter` | `apollo` | Required |
 | `HUNTER_API_KEY` | Hunter.io API key for free-tier enrichment. | your Hunter key | blank or backup only | Optional in Phase 2 |
 | `APOLLO_API_KEY` | Apollo API key for scaled enrichment. | blank | your Apollo key | Optional in Phase 1, required in Phase 2 if using Apollo |
@@ -161,11 +166,17 @@ The project reads configuration from `.env`. Use the Phase 1 column for local an
 | `SENDGRID_API_KEY` | SendGrid API key for delivery. | your SendGrid free-tier key | backup or transactional-only key | Optional in Phase 2 |
 | `SENDGRID_FROM_EMAIL` | Verified sender used for outbound messages. | verified Phase 1 sender | verified production sender/domain | Required when using SendGrid |
 | `INSTANTLY_API_KEY` | Instantly.ai key for scaled outreach sending. | blank | your Instantly key | Optional in Phase 1, required in Phase 2 if using Instantly |
+| `INSTANTLY_CAMPAIGN_ID` | Instantly campaign identifier used for API-based lead injection. | blank | active Instantly campaign id | Optional in Phase 1, required in Phase 2 if using Instantly |
+| `INSTANTLY_API_BASE_URL` | Instantly API base URL. | `https://api.instantly.ai` | provider base URL | Optional |
+| `INSTANTLY_REQUEST_TIMEOUT_SECONDS` | Timeout for Instantly API calls. | `30` | `30` to `60` | Optional |
 | `EMAIL_DAILY_LIMIT` | Daily cap on total sends. | `50` | `500+` based on warmup policy | Required |
 | `FOLLOWUP_DAY_1` | Delay before first follow-up. | `3` | `3` | Optional |
 | `FOLLOWUP_DAY_2` | Delay before second follow-up. | `7` | `7` | Optional |
 | `FOLLOWUP_DAY_3` | Delay before third follow-up. | `14` | `14` | Optional |
 | `API_KEY` | Header-based API key for protected routes outside local mode. | blank in local | strong secret value | Optional in Phase 1, required in Phase 2 |
+| `SCOUT_TARGET_INDUSTRIES` | Weekly Airflow scout target industries. | `all` | comma-separated production targets | Optional |
+| `SCOUT_TARGET_LOCATIONS` | Weekly Airflow scout target locations. | `all` | comma-separated production targets | Optional |
+| `SCOUT_WEEKLY_TARGET_COUNT` | Weekly target count for scheduled scout runs. | `20` | production weekly target | Optional |
 | `SLACK_WEBHOOK_URL` | Slack webhook for reply and ops alerts. | your Slack webhook | your production Slack webhook | Required |
 | `ALERT_EMAIL` | Optional fallback alert recipient email address. | sales lead email or blank | monitored ops/sales inbox | Optional |
 | `SCORE_WEIGHT_RECOVERY` | Weight for savings recovery in scoring. | `0.40` | `0.40` | Optional |

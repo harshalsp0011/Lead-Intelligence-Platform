@@ -27,6 +27,16 @@ class Settings:
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
     # ------------------------------------------------------------------ #
+    # PLATFORM / BRAND
+    # ------------------------------------------------------------------ #
+    TB_BRAND_NAME: str = os.getenv("TB_BRAND_NAME", "Troy & Banks")
+    TB_OFFICE_LOCATION: str = os.getenv("TB_OFFICE_LOCATION", "Buffalo, NY")
+    UNSUBSCRIBE_INSTRUCTION: str = os.getenv(
+        "UNSUBSCRIBE_INSTRUCTION",
+        "To unsubscribe reply with STOP.",
+    )
+
+    # ------------------------------------------------------------------ #
     # LLM
     # ------------------------------------------------------------------ #
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "ollama")
@@ -49,6 +59,17 @@ class Settings:
     BRIGHTDATA_KEY: str = os.getenv("BRIGHTDATA_KEY", "")
     REQUEST_DELAY_SECONDS: int = int(os.getenv("REQUEST_DELAY_SECONDS", "2"))
     MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "3"))
+    SCRAPER_REQUEST_TIMEOUT_SECONDS: int = int(
+        os.getenv("SCRAPER_REQUEST_TIMEOUT_SECONDS", "30")
+    )
+    SCRAPER_USER_AGENT: str = os.getenv(
+        "SCRAPER_USER_AGENT",
+        (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+    )
 
     # ------------------------------------------------------------------ #
     # CONTACT ENRICHMENT
@@ -72,10 +93,27 @@ class Settings:
     SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")
     SENDGRID_FROM_EMAIL: str = os.getenv("SENDGRID_FROM_EMAIL", "")
     INSTANTLY_API_KEY: str = os.getenv("INSTANTLY_API_KEY", "")
+    INSTANTLY_CAMPAIGN_ID: str = os.getenv("INSTANTLY_CAMPAIGN_ID", "")
+    INSTANTLY_API_BASE_URL: str = os.getenv(
+        "INSTANTLY_API_BASE_URL",
+        "https://api.instantly.ai",
+    )
+    INSTANTLY_REQUEST_TIMEOUT_SECONDS: int = int(
+        os.getenv("INSTANTLY_REQUEST_TIMEOUT_SECONDS", "30")
+    )
     EMAIL_DAILY_LIMIT: int = int(os.getenv("EMAIL_DAILY_LIMIT", "50"))
     FOLLOWUP_DAY_1: int = int(os.getenv("FOLLOWUP_DAY_1", "3"))
     FOLLOWUP_DAY_2: int = int(os.getenv("FOLLOWUP_DAY_2", "7"))
     FOLLOWUP_DAY_3: int = int(os.getenv("FOLLOWUP_DAY_3", "14"))
+
+    # ------------------------------------------------------------------ #
+    # SCOUT SCHEDULING
+    # ------------------------------------------------------------------ #
+    SCOUT_TARGET_INDUSTRIES: str = os.getenv("SCOUT_TARGET_INDUSTRIES", "all")
+    SCOUT_TARGET_LOCATIONS: str = os.getenv("SCOUT_TARGET_LOCATIONS", "all")
+    SCOUT_WEEKLY_TARGET_COUNT: int = int(
+        os.getenv("SCOUT_WEEKLY_TARGET_COUNT", "20")
+    )
 
     # ------------------------------------------------------------------ #
     # API

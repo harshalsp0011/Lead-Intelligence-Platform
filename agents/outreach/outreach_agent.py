@@ -16,14 +16,26 @@ Usage:
 - Call `get_approved_queue(db_session)` before first-send queue processing.
 """
 
-from datetime import date
+from datetime import date, datetime, timezone
+import uuid
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from agents.outreach import email_sender, followup_scheduler, sequence_manager
 from config.settings import get_settings
+from database.orm_models import EmailDraft, OutreachEvent
+
+
+def _try_parse_uuid(value: str) -> uuid.UUID | None:
+    """Parse a UUID value and return None for blank or invalid input."""
+    if not value:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def process_followup_queue(db_session: Session) -> int:
@@ -65,42 +77,30 @@ def process_followup_queue(db_session: Session) -> int:
         sent_count += 1
 
         # Mark scheduled record as sent.
-        db_session.execute(
-            text(
-                """
-                UPDATE outreach_events
-                SET event_type = 'followup_sent',
-                    event_at = NOW(),
-                    reply_content = :reply_content
-                WHERE id = :event_id
-                """
-            ),
-            {
-                "event_id": str(followup.get("id") or ""),
-                "reply_content": f"message_id:{send_result.get('message_id', '')}",
-            },
-        )
+        event_id = _try_parse_uuid(str(followup.get("id") or ""))
+        if event_id is not None:
+            scheduled_event = db_session.get(OutreachEvent, event_id)
+            if scheduled_event is not None:
+                scheduled_event.event_type = "followup_sent"
+                scheduled_event.event_at = datetime.now(timezone.utc)
+                scheduled_event.reply_content = f"message_id:{send_result.get('message_id', '')}"
 
         if follow_up_number < 3:
             # Ensure future follow-ups exist in case they were not pre-scheduled.
-            existing_future = db_session.execute(
-                text(
-                    """
-                    SELECT 1
-                    FROM outreach_events
-                    WHERE company_id = :company_id
-                      AND contact_id = :contact_id
-                      AND event_type = 'scheduled_followup'
-                      AND follow_up_number > :current_followup_number
-                    LIMIT 1
-                    """
-                ),
-                {
-                    "company_id": company_id,
-                    "contact_id": contact_id,
-                    "current_followup_number": follow_up_number,
-                },
-            ).first()
+            parsed_company_id = _try_parse_uuid(company_id)
+            parsed_contact_id = _try_parse_uuid(contact_id)
+            existing_future = None
+            if parsed_company_id is not None and parsed_contact_id is not None:
+                existing_future = db_session.execute(
+                    select(OutreachEvent.id)
+                    .where(
+                        OutreachEvent.company_id == parsed_company_id,
+                        OutreachEvent.contact_id == parsed_contact_id,
+                        OutreachEvent.event_type == "scheduled_followup",
+                        OutreachEvent.follow_up_number > follow_up_number,
+                    )
+                    .limit(1)
+                ).scalar()
 
             if existing_future is None:
                 followup_scheduler.schedule_followups(
@@ -120,30 +120,39 @@ def process_followup_queue(db_session: Session) -> int:
 
 def get_approved_queue(db_session: Session) -> list[dict[str, Any]]:
     """Return approved draft rows that do not yet have a sent event."""
-    rows = db_session.execute(
-        text(
-            """
-            SELECT
-                d.id,
-                d.company_id,
-                d.contact_id,
-                d.subject_line,
-                d.body,
-                d.savings_estimate,
-                d.template_used,
-                d.created_at
-            FROM email_drafts d
-            LEFT JOIN outreach_events oe
-                ON oe.email_draft_id = d.id
-               AND oe.event_type IN ('sent', 'followup_sent')
-            WHERE d.approved_human = true
-              AND oe.id IS NULL
-            ORDER BY d.created_at ASC
-            """
-        )
-    ).mappings().all()
+    drafts = db_session.execute(
+        select(EmailDraft)
+        .where(EmailDraft.approved_human.is_(True))
+        .order_by(EmailDraft.created_at.asc())
+    ).scalars().all()
 
-    return [dict(row) for row in rows]
+    queue: list[dict[str, Any]] = []
+    for draft in drafts:
+        sent_event_exists = db_session.execute(
+            select(OutreachEvent.id)
+            .where(
+                OutreachEvent.email_draft_id == draft.id,
+                OutreachEvent.event_type.in_(["sent", "followup_sent"]),
+            )
+            .limit(1)
+        ).scalar()
+        if sent_event_exists is not None:
+            continue
+
+        queue.append(
+            {
+                "id": str(draft.id),
+                "company_id": str(draft.company_id) if draft.company_id else None,
+                "contact_id": str(draft.contact_id) if draft.contact_id else None,
+                "subject_line": draft.subject_line,
+                "body": draft.body,
+                "savings_estimate": draft.savings_estimate,
+                "template_used": draft.template_used,
+                "created_at": draft.created_at,
+            }
+        )
+
+    return queue
 
 
 def check_daily_limit(db_session: Session) -> dict[str, Any]:
@@ -178,54 +187,26 @@ def _create_followup_draft(
     follow_up_number: int,
     db_session: Session,
 ) -> str:
-    row = db_session.execute(
-        text(
-            """
-            SELECT savings_estimate
-            FROM email_drafts
-            WHERE id = :draft_id
-            LIMIT 1
-            """
-        ),
-        {"draft_id": original_draft_id},
-    ).mappings().first()
+    parsed_original_draft_id = _try_parse_uuid(original_draft_id)
+    source_draft = (
+        db_session.get(EmailDraft, parsed_original_draft_id)
+        if parsed_original_draft_id is not None
+        else None
+    )
+    savings_estimate = str((source_draft.savings_estimate if source_draft else "") or "")
 
-    savings_estimate = str((row or {}).get("savings_estimate") or "")
+    followup_draft = EmailDraft(
+        id=uuid.uuid4(),
+        company_id=_try_parse_uuid(company_id),
+        contact_id=_try_parse_uuid(contact_id),
+        subject_line=subject,
+        body=body,
+        savings_estimate=savings_estimate,
+        template_used=f"followup_day{follow_up_number}",
+        approved_human=True,
+        edited_human=False,
+    )
+    db_session.add(followup_draft)
+    db_session.flush()
 
-    inserted_id = db_session.execute(
-        text(
-            """
-            INSERT INTO email_drafts (
-                company_id,
-                contact_id,
-                subject_line,
-                body,
-                savings_estimate,
-                template_used,
-                approved_human,
-                edited_human
-            )
-            VALUES (
-                :company_id,
-                :contact_id,
-                :subject_line,
-                :body,
-                :savings_estimate,
-                :template_used,
-                true,
-                false
-            )
-            RETURNING id
-            """
-        ),
-        {
-            "company_id": company_id,
-            "contact_id": contact_id,
-            "subject_line": subject,
-            "body": body,
-            "savings_estimate": savings_estimate,
-            "template_used": f"followup_day{follow_up_number}",
-        },
-    ).scalar_one()
-
-    return str(inserted_id)
+    return str(followup_draft.id)
