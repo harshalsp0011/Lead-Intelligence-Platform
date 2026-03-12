@@ -1,0 +1,85 @@
+# Prometheus Configuration for Utility Lead Platform
+#
+# Purpose: Centralized monitoring and metrics scraping configuration
+# Collects metrics from:
+#   - FastAPI backend (utility-lead-api)
+#   - PostgreSQL database exporter
+#   - Apache Airflow orchestration platform
+#
+# Dependencies:
+#   - Prometheus server running locally or accessible
+#   - API metrics endpoint exposing Prometheus format
+#   - postgres_exporter running on port 9187
+#   - Airflow metrics endpoint running on port 8080
+#
+# Usage:
+#   prometheus --config.file=monitoring/prometheus/prometheus.yml
+#   Access dashboard at http://localhost:9090
+
+# Global settings applied to all scrape configs
+global:
+  scrape_interval: 15s          # How often to scrape targets by default
+  evaluation_interval: 15s       # How often to evaluate rules
+  external_labels:
+    monitor: 'utility-lead-platform'
+
+# Alerting configuration (optional, for future alert rules)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+# Rule files (optional, for future alerting rules)
+rule_files: []
+
+# Scrape configurations
+scrape_configs:
+  # Job 1: FastAPI Utility Lead API
+  - job_name: 'utility-lead-api'
+    static_configs:
+      - targets: ['localhost:8001']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+
+    # Metrics collected from API:
+    # - leads_found_total (counter): Total number of companies found
+    # - leads_scored_total (counter): Total number of leads scored
+    # - leads_by_tier_total (counter, label: tier): Count per tier (high/medium/low)
+    # - emails_sent_total (counter): Total emails sent
+    # - emails_opened_total (counter): Total emails opened by recipients
+    # - emails_replied_total (counter): Total emails with replies
+    # - pipeline_value_dollars (gauge): Current total pipeline value in dollars
+    # - agent_run_duration_seconds (histogram): Time taken for agent runs (buckets: 1, 5, 10, 30, 60, 120, 300, 600, 1800)
+    # - agent_errors_total (counter, label: agent_name): Errors per agent (scout/analyst/writer/tracker/outreach/orchestrator)
+
+  # Job 2: PostgreSQL Exporter
+  - job_name: 'postgres-exporter'
+    static_configs:
+      - targets: ['localhost:9187']
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+    # Metrics collected from PostgreSQL:
+    # - pg_up (gauge): Whether PostgreSQL is up
+    # - pg_database_size_bytes (gauge): Database size in bytes
+    # - pg_stat_user_tables_seq_scan (gauge): Sequential scans per table
+    # - pg_stat_user_tables_idx_scan (gauge): Index scans per table
+    # - pg_slow_queries (gauge): Count of slow queries (if log_min_duration_statement configured)
+
+  # Job 3: Apache Airflow
+  - job_name: 'airflow'
+    static_configs:
+      - targets: ['localhost:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+    # Metrics collected from Airflow:
+    # - airflow_dag_status (gauge): DAG state (success=1, failure=0, running=2)
+    # - airflow_dag_duration_seconds (gauge): Duration of DAG runs
+    # - airflow_task_duration_seconds (gauge): Duration of individual tasks
+    # - airflow_task_fail (counter): Failed task count
+    # - airflow_pool_open_slots (gauge): Available slots in pools
+    # - airflow_executor_open_slots (gauge): Available executor slots
+    # - airflow_scheduler_heartbeat (gauge): Scheduler heartbeat (up=1)

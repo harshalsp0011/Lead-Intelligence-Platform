@@ -1,0 +1,682 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "utility-lead-platform",
+    "title": "Utility Lead Intelligence Platform",
+    "tags": [
+      "leads",
+      "pipeline",
+      "troy-banks"
+    ],
+    "timezone": "browser",
+    "schemaVersion": 38,
+    "version": 1,
+    "refresh": "30s",
+    "time": {
+      "from": "now-7d",
+      "to": "now"
+    },
+    "timepicker": {
+      "refresh_intervals": [
+        "5s",
+        "10s",
+        "30s",
+        "1m",
+        "5m",
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "1d"
+      ]
+    },
+    "description": "Real-time monitoring dashboard for the Utility Lead Intelligence Platform. Tracks pipeline stages, lead generation, email performance, and agent health metrics.",
+    "panels": [
+      {
+        "id": 1,
+        "gridPos": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 0
+        },
+        "type": "stat",
+        "title": "Pipeline Overview",
+        "description": "Current counts for each pipeline stage",
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "sum(leads_by_tier_total{tier=\"high\"})",
+            "legendFormat": "High Tier",
+            "refId": "A"
+          },
+          {
+            "expr": "sum(leads_by_tier_total{tier=\"medium\"})",
+            "legendFormat": "Medium Tier",
+            "refId": "B"
+          },
+          {
+            "expr": "sum(leads_by_tier_total{tier=\"low\"})",
+            "legendFormat": "Low Tier",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "hideFrom": {
+                "tooltip": false,
+                "viz": false,
+                "legend": false
+              }
+            },
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                }
+              ]
+            },
+            "unit": "short"
+          },
+          "overrides": [
+            {
+              "matcher": {
+                "id": "byName",
+                "options": "High Tier"
+              },
+              "properties": [
+                {
+                  "id": "color",
+                  "value": {
+                    "mode": "fixed",
+                    "fixedColor": "green"
+                  }
+                }
+              ]
+            },
+            {
+              "matcher": {
+                "id": "byName",
+                "options": "Medium Tier"
+              },
+              "properties": [
+                {
+                  "id": "color",
+                  "value": {
+                    "mode": "fixed",
+                    "fixedColor": "yellow"
+                  }
+                }
+              ]
+            },
+            {
+              "matcher": {
+                "id": "byName",
+                "options": "Low Tier"
+              },
+              "properties": [
+                {
+                  "id": "color",
+                  "value": {
+                    "mode": "fixed",
+                    "fixedColor": "gray"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "options": {
+          "orientation": "auto",
+          "textMode": "value_and_name",
+          "reduceOptions": {
+            "values": false,
+            "calcs": [
+              "lastNotNull"
+            ]
+          },
+          "colorMode": "background",
+          "graphMode": "none"
+        },
+        "pluginVersion": "8.0.0",
+        "interval": "30s"
+      },
+      {
+        "id": 2,
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 8
+        },
+        "type": "timeseries",
+        "title": "Leads Found Over Time",
+        "description": "Cumulative leads found by Scout agent (last 30 days)",
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "leads_found_total",
+            "legendFormat": "Total Found",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "lineWidth": 2,
+              "fillOpacity": 10,
+              "showPoints": "never",
+              "spanNulls": true
+            },
+            "color": {
+              "mode": "fixed",
+              "fixedColor": "blue"
+            }
+          }
+        },
+        "options": {
+          "tooltip": {
+            "mode": "multi"
+          },
+          "legend": {
+            "calcs": [
+              "mean",
+              "max"
+            ],
+            "displayMode": "table",
+            "placement": "bottom"
+          }
+        },
+        "pluginVersion": "8.0.0",
+        "interval": "5m"
+      },
+      {
+        "id": 3,
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 8
+        },
+        "type": "barchart",
+        "title": "Email Performance",
+        "description": "Email metrics: Sent, Opened, Replied",
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "emails_sent_total",
+            "legendFormat": "Sent",
+            "refId": "A"
+          },
+          {
+            "expr": "emails_opened_total",
+            "legendFormat": "Opened",
+            "refId": "B"
+          },
+          {
+            "expr": "emails_replied_total",
+            "legendFormat": "Replied",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "lineWidth": 1,
+              "fillOpacity": 100,
+              "showPoints": "never"
+            }
+          },
+          "overrides": [
+            {
+              "matcher": {
+                "id": "byName",
+                "options": "Sent"
+              },
+              "properties": [
+                {
+                  "id": "color",
+                  "value": {
+                    "mode": "fixed",
+                    "fixedColor": "blue"
+                  }
+                }
+              ]
+            },
+            {
+              "matcher": {
+                "id": "byName",
+                "options": "Opened"
+              },
+              "properties": [
+                {
+                  "id": "color",
+                  "value": {
+                    "mode": "fixed",
+                    "fixedColor": "yellow"
+                  }
+                }
+              ]
+            },
+            {
+              "matcher": {
+                "id": "byName",
+                "options": "Replied"
+              },
+              "properties": [
+                {
+                  "id": "color",
+                  "value": {
+                    "mode": "fixed",
+                    "fixedColor": "green"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "options": {
+          "orientation": "auto",
+          "legend": {
+            "calcs": [],
+            "displayMode": "list",
+            "placement": "bottom"
+          },
+          "tooltip": {
+            "mode": "multi"
+          }
+        },
+        "pluginVersion": "8.0.0",
+        "interval": "5m"
+      },
+      {
+        "id": 4,
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 0,
+          "y": 16
+        },
+        "type": "stat",
+        "title": "Open Rate",
+        "description": "Emails opened / sent ratio",
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "(emails_opened_total / emails_sent_total) * 100",
+            "legendFormat": "Open Rate %",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "custom": {
+              "hideFrom": {
+                "tooltip": false,
+                "viz": false,
+                "legend": false
+              }
+            },
+            "thresholds": {
+              "mode": "percentage",
+              "steps": [
+                {
+                  "color": "red",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 20
+                },
+                {
+                  "color": "green",
+                  "value": 40
+                }
+              ]
+            }
+          }
+        },
+        "options": {
+          "colorMode": "background",
+          "graphMode": "none",
+          "textMode": "value_and_name",
+          "reduceOptions": {
+            "values": false,
+            "calcs": [
+              "lastNotNull"
+            ]
+          }
+        },
+        "pluginVersion": "8.0.0",
+        "interval": "5m"
+      },
+      {
+        "id": 5,
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 6,
+          "y": 16
+        },
+        "type": "stat",
+        "title": "Reply Rate",
+        "description": "Emails replied / sent ratio",
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "(emails_replied_total / emails_sent_total) * 100",
+            "legendFormat": "Reply Rate %",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "custom": {
+              "hideFrom": {
+                "tooltip": false,
+                "viz": false,
+                "legend": false
+              }
+            },
+            "thresholds": {
+              "mode": "percentage",
+              "steps": [
+                {
+                  "color": "red",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 5
+                },
+                {
+                  "color": "green",
+                  "value": 10
+                }
+              ]
+            }
+          }
+        },
+        "options": {
+          "colorMode": "background",
+          "graphMode": "none",
+          "textMode": "value_and_name",
+          "reduceOptions": {
+            "values": false,
+            "calcs": [
+              "lastNotNull"
+            ]
+          }
+        },
+        "pluginVersion": "8.0.0",
+        "interval": "5m"
+      },
+      {
+        "id": 6,
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 16
+        },
+        "type": "timeseries",
+        "title": "Pipeline Value Over Time",
+        "description": "Total pipeline value in dollars (last 30 days)",
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "pipeline_value_dollars",
+            "legendFormat": "Pipeline Value",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "lineWidth": 0,
+              "fillOpacity": 100,
+              "showPoints": "never",
+              "spanNulls": true
+            },
+            "color": {
+              "mode": "fixed",
+              "fixedColor": "green"
+            },
+            "unit": "currencyUSD"
+          }
+        },
+        "options": {
+          "tooltip": {
+            "mode": "multi"
+          },
+          "legend": {
+            "calcs": [
+              "mean",
+              "max",
+              "min"
+            ],
+            "displayMode": "table",
+            "placement": "bottom"
+          }
+        },
+        "pluginVersion": "8.0.0",
+        "interval": "5m"
+      },
+      {
+        "id": 7,
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 24
+        },
+        "type": "heatmap",
+        "title": "Agent Run Durations",
+        "description": "Heatmap showing how long each agent takes to run (histogram)",
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "rate(agent_run_duration_seconds_bucket[5m])",
+            "legendFormat": "{{ le }}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "hideFrom": {
+                "tooltip": false,
+                "viz": false,
+                "legend": false
+              }
+            },
+            "unit": "s"
+          }
+        },
+        "options": {
+          "legend": {
+            "show": true,
+            "displayMode": "list",
+            "placement": "bottom"
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          }
+        },
+        "pluginVersion": "8.0.0",
+        "interval": "5m"
+      },
+      {
+        "id": 8,
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 24
+        },
+        "type": "timeseries",
+        "title": "Error Rate by Agent",
+        "description": "Agent errors per hour (alert threshold: >5 errors/hour)",
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "increase(agent_errors_total[1h]) by (agent_name)",
+            "legendFormat": "{{ agent_name }}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "lineWidth": 2,
+              "fillOpacity": 0,
+              "showPoints": "auto",
+              "spanNulls": false
+            },
+            "color": {
+              "mode": "fixed",
+              "fixedColor": "red"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 3
+                },
+                {
+                  "color": "red",
+                  "value": 5
+                }
+              ]
+            }
+          }
+        },
+        "options": {
+          "tooltip": {
+            "mode": "multi"
+          },
+          "legend": {
+            "calcs": [
+              "max",
+              "mean"
+            ],
+            "displayMode": "table",
+            "placement": "bottom"
+          }
+        },
+        "pluginVersion": "8.0.0",
+        "interval": "1m"
+      },
+      {
+        "id": 9,
+        "gridPos": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 32
+        },
+        "type": "table",
+        "title": "Daily Activity Summary",
+        "description": "Last 24 hours of activity metrics (updates every 5 minutes)",
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "leads_found_total",
+            "format": "table",
+            "instant": true,
+            "refId": "A"
+          },
+          {
+            "expr": "leads_scored_total",
+            "format": "table",
+            "instant": true,
+            "refId": "B"
+          },
+          {
+            "expr": "emails_sent_total",
+            "format": "table",
+            "instant": true,
+            "refId": "C"
+          },
+          {
+            "expr": "emails_replied_total",
+            "format": "table",
+            "instant": true,
+            "refId": "D"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "custom": {
+              "width": 150,
+              "align": "center",
+              "displayMode": "auto",
+              "filterable": true
+            }
+          },
+          "overrides": [
+            {
+              "matcher": {
+                "id": "byName",
+                "options": "Time"
+              },
+              "properties": [
+                {
+                  "id": "custom.width",
+                  "value": 180
+                }
+              ]
+            }
+          ]
+        },
+        "options": {
+          "sortBy": [
+            {
+              "displayName": "Time",
+              "desc": true
+            }
+          ],
+          "showHeader": true,
+          "reduceOptions": {
+            "values": false,
+            "calcs": [
+              "lastNotNull"
+            ]
+          }
+        },
+        "pluginVersion": "8.0.0",
+        "interval": "5m"
+      }
+    ],
+    "templating": {
+      "list": []
+    },
+    "annotations": {
+      "list": [
+        {
+          "builtIn": 1,
+          "datasource": "Prometheus",
+          "enable": true,
+          "hide": true,
+          "iconColor": "rgba(0, 211, 255, 1)",
+          "name": "Annotations & Alerts",
+          "type": "dashboard"
+        }
+      ]
+    }
+  },
+  "overwrite": false
+}
