@@ -7,6 +7,8 @@ Utility Lead Intelligence Platform is an AI-assisted prospecting and outreach sy
 
 ## 2. Architecture Overview
 
+![Architecture Design Reference](./Design.png)
+
 The platform is organized into six layers:
 
 1. Data Sources
