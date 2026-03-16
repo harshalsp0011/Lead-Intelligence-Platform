@@ -111,6 +111,8 @@ ollama --version
 8. Open the dashboard at `http://localhost:3000`.
 
 9. Open Airflow at `http://localhost:8080`.
+	- Username: `admin`
+	- Password: `admin`
 
 10. Open API docs at `http://localhost:8001/docs`.
 
@@ -379,7 +381,7 @@ docker-compose restart airflow
 docker logs <airflow-container-name>
 ```
 
-Also verify that the `dags/` folder contains the expected DAG files and that the container has mounted them correctly.
+Also verify that the `dags/` folder contains the expected DAG files. This project mounts the DAG and project folders directly into the Airflow container.
 
 ### Dashboard blank page
 

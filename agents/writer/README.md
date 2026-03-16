@@ -65,3 +65,9 @@ From `config/settings.py`:
 7. `llm_connector` generates subject/body text.
 8. `tone_validator.validate_tone()` checks spam-risk and professionalism; the agent retries body generation once if needed.
 9. `writer_agent.save_draft()` stores the result in `email_drafts` and updates company status to `draft_created`.
+
+## Container
+
+- Dockerfile: `agents/writer/Dockerfile`
+- Service name in compose: `writer`
+- Container command: `python agents/writer/writer_agent.py`

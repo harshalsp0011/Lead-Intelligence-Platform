@@ -10,6 +10,9 @@ Defines typed SQLAlchemy ORM mappings for `companies`, `company_features`, `lead
 `contacts`, `email_drafts`, and `outreach_events`. Services can import these models to use
 ORM queries instead of raw SQL text statements.
 
+Compatibility note:
+- `orm_models.py` supports both SQLAlchemy 2.x and SQLAlchemy 1.4 so the main API containers and the Airflow container can import the same model definitions.
+
 `migrations/`
 Contains the SQL files that create tables in order.
 

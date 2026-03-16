@@ -17,14 +17,32 @@ Usage:
 
 from datetime import date, datetime
 import uuid
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import declarative_base
 
+ModelT = TypeVar("ModelT")
 
-class Base(DeclarativeBase):
-    """Base class for all ORM models."""
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Mapped
+else:
+    class Mapped(Generic[ModelT]):
+        """Compatibility placeholder used when annotations are evaluated at runtime."""
+
+try:
+    from sqlalchemy.orm import DeclarativeBase, mapped_column
+
+    class Base(DeclarativeBase):
+        """Base class for all ORM models."""
+
+except ImportError:
+    def mapped_column(*args: Any, **kwargs: Any) -> Any:
+        """Fallback to Column() for SQLAlchemy 1.4 compatibility."""
+        return Column(*args, **kwargs)
+
+    Base = declarative_base()
 
 
 class Company(Base):

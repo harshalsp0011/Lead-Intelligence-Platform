@@ -26,3 +26,9 @@ How they work together:
 
 This means the scraper collects raw directory data, the extractor normalizes it,
 and the crawler adds website intelligence before persistence.
+
+## Container
+
+- Dockerfile: `agents/scout/Dockerfile`
+- Service name in compose: `scout`
+- Container command: `python agents/scout/scout_agent.py`

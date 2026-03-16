@@ -30,7 +30,7 @@ from typing import Any, Iterator
 
 import requests
 from airflow import DAG
-from airflow.providers.standard.operators.python import PythonOperator
+from airflow.operators.python import PythonOperator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -334,25 +334,25 @@ def send_daily_summary(**context: Any) -> None:
     with db_session_scope() as db_session:
         # Count new replies received today
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-            reply_count = int(db_session.execute(
-                select(func.count(func.distinct(OutreachEvent.company_id))).where(
-                    OutreachEvent.event_type == "replied",
-                    OutreachEvent.event_at >= today_start,
-                )
-            ).scalar_one() or 0)
+        reply_count = int(db_session.execute(
+            select(func.count(func.distinct(OutreachEvent.company_id))).where(
+                OutreachEvent.event_type == "replied",
+                OutreachEvent.event_at >= today_start,
+            )
+        ).scalar_one() or 0)
 
-            # Count hot leads (replied but not yet alerted)
-            hot_count = int(db_session.execute(
-                select(func.count(func.distinct(OutreachEvent.company_id))).where(
-                    OutreachEvent.event_type == "replied",
-                    (OutreachEvent.sales_alerted == False) | (OutreachEvent.sales_alerted.is_(None)),  # noqa: E712
-                )
-            ).scalar_one() or 0)
+        # Count hot leads (replied but not yet alerted)
+        hot_count = int(db_session.execute(
+            select(func.count(func.distinct(OutreachEvent.company_id))).where(
+                OutreachEvent.event_type == "replied",
+                (OutreachEvent.sales_alerted == False) | (OutreachEvent.sales_alerted.is_(None)),  # noqa: E712
+            )
+        ).scalar_one() or 0)
 
-            # Count active leads in pipeline
-            active_count = int(db_session.execute(
-                select(func.count(func.distinct(Company.id))).where(
-                    Company.status.not_in(["lost", "archived", "no_response", "won"]),
+        # Count active leads in pipeline
+        active_count = int(db_session.execute(
+            select(func.count(func.distinct(Company.id))).where(
+                Company.status.not_in(["lost", "archived", "no_response", "won"]),
                 )
             ).scalar_one() or 0)
 

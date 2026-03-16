@@ -1,0 +1,12 @@
+.git
+.gitignore
+.gitattributes
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+node_modules
+dashboard/node_modules

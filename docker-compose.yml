@@ -1,77 +1,91 @@
-version: "3.9"
-
 services:
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_DB: leads
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: password
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-
-  orchestrator:
-    build: ./agents/orchestrator
-    env_file: .env
-    depends_on:
-      - postgres
-    ports:
-      - "8000:8000"
-
   scout:
-    build: ./agents/scout
+    build:
+      context: .
+      dockerfile: agents/scout/Dockerfile
     env_file: .env
-    depends_on:
-      - postgres
+    command: sh -c "python -m agents.scout.scout_agent || true; tail -f /dev/null"
 
   analyst:
-    build: ./agents/analyst
+    build:
+      context: .
+      dockerfile: agents/analyst/Dockerfile
     env_file: .env
-    depends_on:
-      - postgres
+    command: sh -c "python -m agents.analyst.analyst_agent || true; tail -f /dev/null"
 
   writer:
-    build: ./agents/writer
+    build:
+      context: .
+      dockerfile: agents/writer/Dockerfile
     env_file: .env
-    depends_on:
-      - postgres
+    command: sh -c "python -m agents.writer.writer_agent || true; tail -f /dev/null"
 
   outreach:
-    build: ./agents/outreach
+    build:
+      context: .
+      dockerfile: agents/outreach/Dockerfile
     env_file: .env
-    depends_on:
-      - postgres
+    command: sh -c "python -m agents.outreach.outreach_agent || true; tail -f /dev/null"
 
   tracker:
-    build: ./agents/tracker
+    build:
+      context: .
+      dockerfile: agents/tracker/Dockerfile
     env_file: .env
-    depends_on:
-      - postgres
+    command: sh -c "python -m agents.tracker.tracker_agent || true; tail -f /dev/null"
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: agents/orchestrator/Dockerfile
+    env_file: .env
+    command: sh -c "python -m agents.orchestrator.orchestrator || true; tail -f /dev/null"
 
   api:
-    build: ./api
+    build:
+      context: .
+      dockerfile: api/Dockerfile
     env_file: .env
     ports:
       - "8001:8001"
-    depends_on:
-      - postgres
 
   frontend:
-    build: ./dashboard
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
     ports:
       - "3000:3000"
     depends_on:
       - api
 
   airflow:
-    image: apache/airflow:2.8.0
+    image: apache/airflow:2.8.0-python3.10
     env_file: .env
+    environment:
+      PYTHONPATH: /opt/airflow/project
+      _PIP_ADDITIONAL_REQUIREMENTS: "langgraph langchain langchain-ollama langchain-openai fastapi uvicorn sqlalchemy psycopg2-binary alembic scrapy playwright beautifulsoup4 requests httpx pydantic python-dotenv sendgrid slack-sdk prometheus-client"
     ports:
       - "8080:8080"
-    depends_on:
-      - postgres
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./agents:/opt/airflow/project/agents
+      - ./config:/opt/airflow/project/config
+      - ./database:/opt/airflow/project/database
+      - ./data:/opt/airflow/project/data
+    command: >
+      bash -c "
+        python -m playwright install chromium || true &&
+      airflow db init &&
+      airflow users create
+      --username admin
+      --password admin
+      --firstname Admin
+      --lastname User
+      --role Admin
+      --email admin@example.com || true &&
+      (airflow webserver --port 8080 &) &&
+      airflow scheduler
+      "
 
   grafana:
     image: grafana/grafana:latest
@@ -84,6 +98,3 @@ services:
       - "9090:9090"
     volumes:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-
-volumes:
-  pgdata:

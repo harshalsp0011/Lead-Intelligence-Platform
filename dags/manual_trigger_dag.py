@@ -28,7 +28,7 @@ from typing import Any, Iterator
 import requests
 from airflow import DAG
 from airflow.models import Param
-from airflow.providers.standard.operators.python import PythonOperator
+from airflow.operators.python import PythonOperator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 

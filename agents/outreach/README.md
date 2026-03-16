@@ -101,3 +101,9 @@ The sender and follow-up scheduler read/write these ORM-backed tables:
   - message_id: provider message id or error/skip reason
 - Instantly flow reads campaign/base URL/timeout settings from `config.settings`.
 - Follow-up intervals are configured centrally through `FOLLOWUP_DAY_3`, `FOLLOWUP_DAY_7`, and `FOLLOWUP_DAY_14`.
+
+## Container
+
+- Dockerfile: `agents/outreach/Dockerfile`
+- Service name in compose: `outreach`
+- Container command: `python agents/outreach/outreach_agent.py`

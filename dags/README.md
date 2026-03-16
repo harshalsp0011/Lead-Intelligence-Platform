@@ -2,6 +2,9 @@
 
 This folder contains Apache Airflow DAG definitions for scheduled pipeline work.
 
+Compatibility note:
+- DAGs in this folder use `airflow.operators.python.PythonOperator` so they load correctly on the current Airflow 2.8 setup used by this project.
+
 ## Files
 
 weekly_scout_dag.py

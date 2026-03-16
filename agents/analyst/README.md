@@ -75,3 +75,9 @@ Otherwise inserts a new row into `contacts` with provider source and returns the
 5. `get_priority_contact(company_id, db_session)`
 Returns the highest-priority contact using title order:
 CFO -> VP/Director Finance -> Facilities -> Operations/Energy -> other verified.
+
+## Container
+
+- Dockerfile: `agents/analyst/Dockerfile`
+- Service name in compose: `analyst`
+- Container command: `python agents/analyst/analyst_agent.py`

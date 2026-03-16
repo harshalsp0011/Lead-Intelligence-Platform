@@ -45,9 +45,9 @@ _EXPECTED_STATUSES = [
 
 def get_pipeline_counts(db_session: Session) -> dict[str, int]:
     """Return count of companies grouped by status with zero-filled defaults."""
-    all_statuses: list[str | None] = db_session.execute(
+    all_statuses: list[str | None] = list(db_session.execute(
         select(Company.status)
-    ).scalars().all()
+    ).scalars().all())
 
     counts: dict[str, int] = {status: 0 for status in _EXPECTED_STATUSES}
     for raw in all_statuses:
@@ -107,12 +107,13 @@ def get_pipeline_value(db_session: Session) -> dict[str, Any]:
 def check_agent_health() -> dict[str, dict[str, str]]:
     """Return health status for core services and critical credentials."""
     settings = get_settings()
+    ollama_url = str(getattr(settings, "OLLAMA_BASE_URL", "http://host.docker.internal:11434") or "http://host.docker.internal:11434").rstrip("/")
 
     health: dict[str, dict[str, str]] = {
         "postgres": _ok("Postgres reachable") if check_connection() else _error("Postgres connection failed"),
-        "ollama": _probe_url("http://localhost:11434"),
+        "ollama": _probe_url(ollama_url),
         "api": _probe_url("http://localhost:8001/health"),
-        "airflow": _probe_url("http://localhost:8080/health"),
+        "airflow": _probe_url("http://host.docker.internal:8080/health"),
         "sendgrid": _ok("SENDGRID_API_KEY configured") if settings.SENDGRID_API_KEY else _warning("SENDGRID_API_KEY missing"),
         "tavily": _ok("TAVILY_API_KEY configured") if settings.TAVILY_API_KEY else _warning("TAVILY_API_KEY missing"),
         "slack": _ok("SLACK_WEBHOOK_URL configured") if settings.SLACK_WEBHOOK_URL else _warning("SLACK_WEBHOOK_URL missing"),

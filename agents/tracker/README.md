@@ -96,3 +96,9 @@ Each parsed event is normalized into:
 5. Send alerts with send_slack_alert(...) and/or send_email_alert(...) when should_alert(...) returns true.
 6. Update lead/contact/event state with status_updater helpers after each event is processed.
 7. Run `run_daily_checks(...)` once per day to find stale leads and resolve or flag them.
+
+## Container
+
+- Dockerfile: `agents/tracker/Dockerfile`
+- Service name in compose: `tracker`
+- Container command: `python agents/tracker/tracker_agent.py`

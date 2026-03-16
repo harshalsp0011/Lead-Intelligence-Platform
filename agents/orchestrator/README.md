@@ -93,3 +93,9 @@ Agent dispatch table:
 8. Call assign_task(agent_name, params, db_session) to dispatch work to any agent.
 9. Call check_task_status(task_id) to poll the current task state.
 10. Call retry_failed_task(task_id, db_session) to retry a failed task (max 3 times).
+
+## Container
+
+- Dockerfile: `agents/orchestrator/Dockerfile`
+- Service name in compose: `orchestrator`
+- Container command: `python agents/orchestrator/orchestrator.py`
