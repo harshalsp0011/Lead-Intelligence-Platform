@@ -24,6 +24,18 @@ How they work together:
 5. It uses `website_crawler.py` for website-based enrichment signals.
 6. It saves cleaned and enriched records into the database tables.
 
+Operational note:
+- If one configured source fails to load or parse, `scout_agent.py` now logs the failure and continues to the next eligible source instead of aborting the whole scout run.
+- If a listing does not include an explicit category/industry value, `scout_agent.py` falls back to the source-level `category` from `data/sources/directory_urls.json` before deciding whether to discard the record as `unknown`.
+- Duplicate protection now compares normalized full website URLs (exact URL match) instead of broad domain matching.
+
+Source matching note:
+- `POST /trigger/scout` does not discover source URLs dynamically. It loads them from `data/sources/directory_urls.json`.
+- The request `industry` is matched against each source entry's `category`.
+- The request `location` is matched against each source entry's `location`.
+- `count` only controls how many companies scout tries to save; it does not affect which URLs are chosen.
+- `run_mode` chooses the pipeline mode; it does not affect source selection.
+
 This means the scraper collects raw directory data, the extractor normalizes it,
 and the crawler adds website intelligence before persistence.
 

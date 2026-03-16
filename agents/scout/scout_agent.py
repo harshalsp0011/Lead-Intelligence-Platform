@@ -7,11 +7,23 @@ and persistence for company discovery workflows.
 """
 
 from importlib import import_module
+import logging
 from typing import Any, TypedDict
 
 from sqlalchemy.orm import Session
 
 from agents.scout import company_extractor, directory_scraper, website_crawler
+
+logger = logging.getLogger(__name__)
+
+_KNOWN_INDUSTRIES = {
+    "healthcare",
+    "hospitality",
+    "manufacturing",
+    "retail",
+    "public_sector",
+    "office",
+}
 
 
 class ScoutState(TypedDict):
@@ -48,7 +60,16 @@ def run(industry: str, location: str, count: int, db_session: Session) -> list[s
                 break
 
             current_state["used_sources"].append(str(next_source.get("name", "")))
-            saved_from_source = scrape_and_save(next_source, current_state["db_session"])
+            try:
+                saved_from_source = scrape_and_save(next_source, current_state["db_session"])
+            except Exception:
+                logger.exception(
+                    "Scout source failed; continuing to next source. source=%s url=%s",
+                    next_source.get("name", ""),
+                    next_source.get("url", ""),
+                )
+                continue
+
             if saved_from_source:
                 remaining = current_state["count"] - len(current_state["saved_ids"])
                 current_state["saved_ids"].extend(saved_from_source[:remaining])
@@ -73,6 +94,7 @@ def scrape_and_save(source_dict: dict[str, Any], db_session: Session) -> list[st
         return []
 
     raw_companies = directory_scraper.scrape_directory(source_url)
+    source_category = str(source_dict.get("category", "")).strip().lower()
     saved_ids: list[str] = []
 
     for raw_company in raw_companies:
@@ -83,10 +105,21 @@ def scrape_and_save(source_dict: dict[str, Any], db_session: Session) -> list[st
         ).strip()
 
         cleaned_company = company_extractor.extract_all_fields(raw_html, raw_text)
-        cleaned_company["industry"] = company_extractor.classify_industry(cleaned_company.get("category"))
+        industry = company_extractor.classify_industry(cleaned_company.get("category"))
 
-        domain = company_extractor.extract_domain(cleaned_company.get("website"))
-        if company_extractor.check_duplicate(domain, db_session):
+        # Some directories do not expose per-listing categories. Fall back to
+        # the source-level category so valid records are not dropped as unknown.
+        if industry == "unknown":
+            source_industry = company_extractor.classify_industry(source_category)
+            if source_industry != "unknown":
+                industry = source_industry
+            elif source_category in _KNOWN_INDUSTRIES:
+                industry = source_category
+
+        cleaned_company["industry"] = industry
+
+        website_url = str(cleaned_company.get("website") or "").strip()
+        if company_extractor.check_duplicate(website_url, db_session):
             continue
 
         if cleaned_company["industry"] == "unknown":

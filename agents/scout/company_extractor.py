@@ -144,17 +144,24 @@ def extract_domain(website_url: Optional[str]) -> Optional[str]:
     return domain or None
 
 
-def check_duplicate(domain: Optional[str], db_session: Session) -> bool:
-    """Return True if a company with a matching website domain already exists."""
-    if not domain:
+def check_duplicate(website_url: Optional[str], db_session: Session) -> bool:
+    """Return True if a company with the same normalized website URL exists."""
+    if not website_url:
         return False
 
-    return (
-        db_session.execute(
-            select(Company.id).where(Company.website.ilike(f"%{domain}%")).limit(1)
-        ).scalar()
-        is not None
-    )
+    normalized = website_url.strip().rstrip("/").lower()
+    if not normalized:
+        return False
+
+    existing_urls = db_session.execute(
+        select(Company.website).where(Company.website.is_not(None))
+    ).scalars().all()
+
+    for existing in existing_urls:
+        if str(existing).strip().rstrip("/").lower() == normalized:
+            return True
+
+    return False
 
 
 def save_to_database(company_dict: dict[str, Any], db_session: Session) -> str:

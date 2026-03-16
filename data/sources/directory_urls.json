@@ -1,42 +1,42 @@
 [
   {
-    "name": "Buffalo Niagara Chamber of Commerce business directory",
-    "url": "https://business.buffaloniagara.org/list",
-    "category": "business",
+    "name": "Yellow Pages Buffalo medical clinics",
+    "url": "https://www.yellowpages.com/buffalo-ny/medical-clinics",
+    "category": "healthcare",
     "location": "Buffalo, NY",
     "pagination": true,
+    "active": false
+  },
+  {
+    "name": "Yellow Pages Buffalo manufacturing companies",
+    "url": "https://www.yellowpages.com/buffalo-ny/manufacturing-companies",
+    "category": "manufacturing",
+    "location": "Buffalo, NY",
+    "pagination": true,
+    "active": false
+  },
+  {
+    "name": "Yellow Pages Buffalo hotels",
+    "url": "https://www.yellowpages.com/buffalo-ny/hotels",
+    "category": "hospitality",
+    "location": "Buffalo, NY",
+    "pagination": true,
+    "active": false
+  },
+  {
+    "name": "Buffalo Niagara life sciences companies",
+    "url": "https://buffaloniagara.org/industry/life-sciences/",
+    "category": "healthcare",
+    "location": "Buffalo, NY",
+    "pagination": false,
     "active": true
   },
   {
     "name": "Buffalo major employers list",
-    "url": "https://www.buffaloniagara.org/why-buffalo-niagara/major-employers/",
+    "url": "https://buffaloniagara.org/advantages/major-employers/",
     "category": "major_employers",
     "location": "Buffalo, NY",
     "pagination": false,
     "active": true
-  },
-  {
-    "name": "WNY healthcare directory",
-    "url": "https://www.wnyhealthenet.com/",
-    "category": "healthcare",
-    "location": "Western New York",
-    "pagination": false,
-    "active": false
-  },
-  {
-    "name": "NY state manufacturing directory",
-    "url": "https://www.nymep.org/",
-    "category": "manufacturing",
-    "location": "New York",
-    "pagination": false,
-    "active": false
-  },
-  {
-    "name": "NY hospitality association directory",
-    "url": "https://www.nyshta.org/",
-    "category": "hospitality",
-    "location": "New York",
-    "pagination": false,
-    "active": false
   }
 ]
