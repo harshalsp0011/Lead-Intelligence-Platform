@@ -5,6 +5,10 @@
 
 Utility Lead Intelligence Platform is an AI-assisted prospecting and outreach system for the Troy & Banks sales team. It finds target companies, scores them for fit and savings potential, generates personalized outbound emails, sends approved sequences, and monitors replies so sales can focus on the highest-intent opportunities. The platform works through five AI agents operating together in a staged pipeline: Scout discovers companies, Analyst scores and enriches them, Writer drafts outreach, Outreach manages delivery and follow-ups, and Tracker captures engagement signals and alerts the team when a prospect responds.
 
+### Agentic Transformation Blueprint
+
+For the detailed plan to evolve this platform from deterministic automation to a truly agentic system, see [AGENTIC_TRANSFORMATION_PLAN.md](AGENTIC_TRANSFORMATION_PLAN.md).
+
 ## 2. Architecture Overview
 
 ![Architecture Design Reference](./Design.png)
