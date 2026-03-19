@@ -28,7 +28,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-import requests
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from sqlalchemy import func, select
@@ -62,22 +61,6 @@ def db_session_scope() -> Iterator[Session]:
     finally:
         session.close()
 
-
-def _send_slack_message(message: str) -> bool:
-    """Post a plain-text Slack message when a webhook is configured."""
-    settings = get_settings()
-    webhook_url = str(getattr(settings, "SLACK_WEBHOOK_URL", "") or "").strip()
-    if not webhook_url:
-        logger.warning("Slack webhook not configured. Message was: %s", message)
-        return False
-
-    try:
-        response = requests.post(webhook_url, json={"text": message}, timeout=10)
-        response.raise_for_status()
-        return True
-    except requests.RequestException:
-        logger.exception("Failed to send Slack message")
-        return False
 
 
 def _format_currency(value: float) -> str:
@@ -224,10 +207,7 @@ def check_daily_limit(**context: Any) -> dict[str, Any] | None:
 
     if not limit_check.get("within_limit"):
         sent_today = int(limit_check.get("sent_today", 0) or 0)
-        _send_slack_message(
-            f"Daily email limit reached —\n"
-            f"{sent_today} emails sent today"
-        )
+        logger.warning("Notification skipped — email notifier not yet implemented")
 
     task_instance = context["ti"]
     remaining = int(
@@ -368,7 +348,7 @@ def send_daily_summary(**context: Any) -> None:
         f"Total active pipeline: {active_count}\n"
         "Dashboard: http://localhost:3000"
     )
-    _send_slack_message(message)
+    logger.warning("Notification skipped — email notifier not yet implemented")
 
 
 default_args = {

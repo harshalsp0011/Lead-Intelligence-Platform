@@ -26,7 +26,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-import requests
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from sqlalchemy import bindparam, text
@@ -198,22 +197,6 @@ def _build_search_plan(
     return plan
 
 
-def _send_slack_message(message: str) -> bool:
-    """Post a plain-text Slack message when a webhook is configured."""
-    settings = get_settings()
-    webhook_url = str(getattr(settings, "SLACK_WEBHOOK_URL", "") or "").strip()
-    if not webhook_url:
-        logger.warning("Slack webhook not configured. Message was: %s", message)
-        return False
-
-    try:
-        response = requests.post(webhook_url, json={"text": message}, timeout=10)
-        response.raise_for_status()
-        return True
-    except requests.RequestException:
-        logger.exception("Failed to send Slack message")
-        return False
-
 
 def load_target_config(**context: Any) -> dict[str, Any]:
     """Load weekly scout target filters and share them via XCom."""
@@ -321,8 +304,7 @@ def validate_scout_results(**context: Any) -> list[str]:
     validated_ids = [str(company_id) for company_id in company_ids if str(company_id).strip()]
 
     if len(validated_ids) < 5:
-        _send_slack_message(
-            "Weekly Scout Alert\n"
+        logger.info("Pipeline notification: %s", "Weekly Scout Alert\n"
             f"Only {len(validated_ids)} companies were found in this run.\n"
             "Review scout sources and target configuration."
         )
@@ -354,7 +336,7 @@ def notify_scout_complete(**context: Any) -> int:
         f"Locations searched: {locations}\n"
         "View dashboard: http://localhost:3000"
     )
-    _send_slack_message(message)
+    logger.info("Pipeline notification: %s", message)
     return count
 
 

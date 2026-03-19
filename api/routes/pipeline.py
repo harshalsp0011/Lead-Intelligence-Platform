@@ -20,8 +20,10 @@ Usage:
 
 from datetime import datetime, timezone
 from typing import Any
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_db, verify_api_key
@@ -32,6 +34,7 @@ from api.models.pipeline import (
     RecentActivityResponse,
 )
 from agents.orchestrator import pipeline_monitor
+from database.orm_models import AgentRun, AgentRunLog
 
 router = APIRouter(dependencies=[Depends(verify_api_key)])
 
@@ -123,3 +126,43 @@ def pipeline_activity(
 def pipeline_issues(db: Session = Depends(get_db)) -> list[str]:
     """Return human-readable strings describing stuck pipeline conditions."""
     return pipeline_monitor.detect_stuck_pipeline(db)
+
+
+@router.get("/run/{run_id}")
+def get_run_status(run_id: UUID, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Return status and counters for a specific agent run by run_id."""
+    run: AgentRun | None = db.get(AgentRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    logs = db.execute(
+        select(AgentRunLog)
+        .where(AgentRunLog.run_id == run_id)
+        .order_by(AgentRunLog.created_at.asc())
+    ).scalars().all()
+
+    return {
+        "run_id": str(run.id),
+        "status": run.status,
+        "current_stage": run.current_stage,
+        "trigger_source": run.trigger_source,
+        "companies_found": run.companies_found,
+        "companies_scored": run.companies_scored,
+        "companies_approved": run.companies_approved,
+        "drafts_created": run.drafts_created,
+        "emails_sent": run.emails_sent,
+        "started_at": run.created_at.isoformat() if run.created_at else None,
+        "updated_at": run.updated_at.isoformat() if run.updated_at else None,
+        "error_message": run.error_message,
+        "log_count": len(logs),
+        "recent_logs": [
+            {
+                "agent": lg.agent,
+                "action": lg.action,
+                "status": lg.status,
+                "output_summary": lg.output_summary,
+                "created_at": lg.created_at.isoformat() if lg.created_at else None,
+            }
+            for lg in logs[-5:]  # last 5 log entries
+        ],
+    }

@@ -144,21 +144,45 @@ def extract_domain(website_url: Optional[str]) -> Optional[str]:
     return domain or None
 
 
-def check_duplicate(website_url: Optional[str], db_session: Session) -> bool:
-    """Return True if a company with the same normalized website URL exists."""
-    if not website_url:
-        return False
+def check_duplicate(
+    website_url: Optional[str],
+    db_session: Session,
+    name: Optional[str] = None,
+    city: Optional[str] = None,
+) -> bool:
+    """Return True if a matching company already exists in the database.
 
-    normalized = website_url.strip().rstrip("/").lower()
-    if not normalized:
-        return False
+    Checks in order:
+    1. Normalized domain match — catches http vs https, www prefix, trailing slash.
+    2. Exact name + city match — catches companies without websites that appear
+       in multiple sources (e.g. Google Maps and Yelp both return the same clinic).
 
-    existing_urls = db_session.execute(
-        select(Company.website).where(Company.website.is_not(None))
-    ).scalars().all()
+    Missing phone or email is not a factor here — those are always optional.
+    """
+    from sqlalchemy import func
 
-    for existing in existing_urls:
-        if str(existing).strip().rstrip("/").lower() == normalized:
+    # --- Check 1: domain match ---
+    if website_url:
+        domain = extract_domain(website_url)
+        if domain:
+            existing = db_session.execute(
+                select(Company.id).where(
+                    Company.website.is_not(None),
+                    func.lower(Company.website).contains(domain),
+                )
+            ).first()
+            if existing:
+                return True
+
+    # --- Check 2: name + city match (for companies with no website) ---
+    if name and city:
+        existing = db_session.execute(
+            select(Company.id).where(
+                func.lower(Company.name) == name.strip().lower(),
+                func.lower(Company.city) == city.strip().lower(),
+            )
+        ).first()
+        if existing:
             return True
 
     return False

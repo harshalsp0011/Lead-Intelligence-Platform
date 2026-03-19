@@ -1,22 +1,26 @@
+# Core API
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+
+# Database
+sqlalchemy
+psycopg2-binary
+
+# LLM / Agent
 langgraph
 langchain
 langchain-ollama
 langchain-openai
-fastapi
-uvicorn
-sqlalchemy
-psycopg2-binary
-alembic
-scrapy
-playwright
-beautifulsoup4
+
+# HTTP / Scraping
 requests
 httpx
-pydantic
-python-dotenv
+beautifulsoup4
+
+# Email
 sendgrid
-slack-sdk
-apache-airflow
-prometheus-client
-pytest
-pytest-asyncio
+
+# Search
+tavily-python

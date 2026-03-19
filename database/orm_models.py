@@ -20,7 +20,7 @@ import uuid
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import declarative_base
 
 ModelT = TypeVar("ModelT")
@@ -45,6 +45,133 @@ except ImportError:
     Base = declarative_base()
 
 
+class AgentRun(Base):
+    """ORM mapping for the agent_runs table.
+
+    One row per pipeline run, whether triggered from chat or Airflow.
+    Tracks target context, current stage, status, output counters, and errors.
+    """
+
+    __tablename__ = "agent_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    trigger_source: Mapped[str] = mapped_column(String(50), nullable=False)
+    trigger_input: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    target_industry: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    target_location: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    target_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="started")
+    current_stage: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    companies_found: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    companies_scored: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    companies_approved: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    drafts_created: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    emails_sent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class AgentRunLog(Base):
+    """ORM mapping for the agent_run_logs table.
+
+    Step-by-step audit of every action inside a run.
+    Every agent writes one row per action: source tried, quality checked, email sent, etc.
+    """
+
+    __tablename__ = "agent_run_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("agent_runs.id"), nullable=False)
+    agent: Mapped[str] = mapped_column(String(50), nullable=False)
+    action: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    input_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    output_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    logged_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class SourcePerformance(Base):
+    """ORM mapping for the source_performance table.
+
+    Learning memory for Scout agent.
+    Tracks how well each source performs per industry+location combination.
+    Scout reads this at run start to rank sources and try the best one first.
+    """
+
+    __tablename__ = "source_performance"
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    industry: Mapped[str] = mapped_column(String(100), nullable=False)
+    location: Mapped[str] = mapped_column(String(200), nullable=False)
+    total_runs: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_leads_found: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_leads_passed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    avg_quality_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    last_quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class EmailWinRate(Base):
+    """ORM mapping for the email_win_rate table.
+
+    Learning memory for Writer agent.
+    Tracks open/reply rates per template+industry combination.
+    Writer reads this to pick the best-performing template next time.
+    """
+
+    __tablename__ = "email_win_rate"
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    template_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    industry: Mapped[str] = mapped_column(String(100), nullable=False)
+    emails_sent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    emails_opened: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    replies_received: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    positive_replies: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    open_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    reply_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    positive_reply_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class HumanApprovalRequest(Base):
+    """ORM mapping for the human_approval_requests table.
+
+    Tracks pending human-in-the-loop approval steps.
+    Created when Analyst finishes scoring or Writer finishes drafts.
+    System sends an email notification. Pipeline pauses until approved.
+    """
+
+    __tablename__ = "human_approval_requests"
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("agent_runs.id"), nullable=True)
+    approval_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
+    items_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    items_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notification_email: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    notification_sent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    notification_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
 class Company(Base):
     """ORM mapping for the companies table."""
 
@@ -63,6 +190,8 @@ class Company(Base):
     source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     date_found: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("agent_runs.id"), nullable=True)
+    quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

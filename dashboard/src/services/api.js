@@ -343,6 +343,35 @@ export async function fetchTopLeads(limit = 10) {
 }
 
 // ============================================================================
+// CHAT AGENT FUNCTION
+// ============================================================================
+
+/**
+ * Send a natural-language message to the chat agent.
+ * @param {string} message - User message
+ * @returns {Promise<object>} - { reply, data, run_id }
+ */
+export async function sendChatMessage(message) {
+  return fetchAPI('/chat', {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+  });
+}
+
+// ============================================================================
+// RUN STATUS FUNCTION
+// ============================================================================
+
+/**
+ * Poll the status of an agent run by run_id.
+ * @param {string} runId - AgentRun UUID
+ * @returns {Promise<object>} - run status and counters
+ */
+export async function fetchRunStatus(runId) {
+  return fetchAPI(`/pipeline/run/${runId}`);
+}
+
+// ============================================================================
 // HEALTH CHECK FUNCTION
 // ============================================================================
 

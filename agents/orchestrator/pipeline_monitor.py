@@ -116,7 +116,7 @@ def check_agent_health() -> dict[str, dict[str, str]]:
         "airflow": _probe_url("http://host.docker.internal:8080/health"),
         "sendgrid": _ok("SENDGRID_API_KEY configured") if settings.SENDGRID_API_KEY else _warning("SENDGRID_API_KEY missing"),
         "tavily": _ok("TAVILY_API_KEY configured") if settings.TAVILY_API_KEY else _warning("TAVILY_API_KEY missing"),
-        "slack": _ok("SLACK_WEBHOOK_URL configured") if settings.SLACK_WEBHOOK_URL else _warning("SLACK_WEBHOOK_URL missing"),
+        "slack": _ok("ALERT_EMAIL configured") if settings.ALERT_EMAIL else _warning("ALERT_EMAIL missing"),
     }
 
     return health

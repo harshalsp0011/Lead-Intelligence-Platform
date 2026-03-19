@@ -23,7 +23,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import emails, leads, pipeline, reports, triggers
+from api.routes import chat, emails, leads, pipeline, reports, triggers
 from database import connection
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,7 @@ app.add_middleware(
 # Routers
 # ---------------------------------------------------------------------------
 
+app.include_router(chat.router,     prefix="/chat")
 app.include_router(leads.router,    prefix="/leads")
 app.include_router(emails.router,   prefix="/emails")
 app.include_router(pipeline.router, prefix="/pipeline")

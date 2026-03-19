@@ -55,7 +55,8 @@ Before starting, make sure the following are installed or created:
   - Tavily: https://search.tavily.com
   - Hunter.io: https://hunter.io
   - SendGrid: https://sendgrid.com
-  - Slack Incoming Webhook: https://api.slack.com
+  - Google Maps (Places API): https://console.cloud.google.com — enable Places API (New), free $200/month credit
+  - Yelp Business Search: https://www.yelp.com/developers — create app, free 500 calls/day
 
 Recommended local checks:
 
@@ -85,12 +86,14 @@ ollama --version
 
 3. Fill in the free API keys in `.env`.
 
-	Minimum Phase 1 keys:
+	Minimum keys:
 	- `TAVILY_API_KEY`
 	- `HUNTER_API_KEY`
 	- `SENDGRID_API_KEY`
 	- `SENDGRID_FROM_EMAIL`
-	- `SLACK_WEBHOOK_URL`
+	- `ALERT_EMAIL`
+	- `GOOGLE_MAPS_API_KEY` (optional — skip to disable Google Maps source)
+	- `YELP_API_KEY` (optional — skip to disable Yelp source)
 
 4. Pull the local Ollama model.
 
@@ -185,8 +188,9 @@ The project reads configuration from `.env`. Use the Phase 1 column for local an
 | `SCOUT_TARGET_INDUSTRIES` | Weekly Airflow scout target industries. | `all` | comma-separated production targets | Optional |
 | `SCOUT_TARGET_LOCATIONS` | Weekly Airflow scout target locations. | `all` | comma-separated production targets | Optional |
 | `SCOUT_WEEKLY_TARGET_COUNT` | Weekly target count for scheduled scout runs. | `20` | production weekly target | Optional |
-| `SLACK_WEBHOOK_URL` | Slack webhook for reply and ops alerts. | your Slack webhook | your production Slack webhook | Required |
-| `ALERT_EMAIL` | Optional fallback alert recipient email address. | sales lead email or blank | monitored ops/sales inbox | Optional |
+| `ALERT_EMAIL` | Email address for all reply and ops alerts. No Slack used. | sales team email | monitored ops/sales inbox | Required |
+| `GOOGLE_MAPS_API_KEY` | Google Places API key for company discovery. Requires billing account but $200/month free credit — free at this scale. | your key or blank to disable | your key | Optional |
+| `YELP_API_KEY` | Yelp Business Search API key. Fully free, 500 calls/day. | your key or blank to disable | your key | Optional |
 | `SCORE_WEIGHT_RECOVERY` | Weight for savings recovery in scoring. | `0.40` | `0.40` | Optional |
 | `SCORE_WEIGHT_INDUSTRY` | Weight for industry fit in scoring. | `0.25` | `0.25` | Optional |
 | `SCORE_WEIGHT_MULTISITE` | Weight for site-count signal in scoring. | `0.20` | `0.20` | Optional |

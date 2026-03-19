@@ -158,7 +158,7 @@ def run_daily_checks(db_session: Session) -> dict[str, int]:
 
 def _send_approval_reminder(company_id: str, company_name: str) -> None:
     settings = get_settings()
-    webhook = str(settings.SLACK_WEBHOOK_URL or "").strip()
+    webhook = str(settings.ALERT_EMAIL or "").strip()
     if not webhook:
         return
 

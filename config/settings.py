@@ -72,6 +72,12 @@ class Settings:
     )
 
     # ------------------------------------------------------------------ #
+    # ADDITIONAL SCOUT SOURCES
+    # ------------------------------------------------------------------ #
+    GOOGLE_MAPS_API_KEY: str = os.getenv("GOOGLE_MAPS_API_KEY", "")
+    YELP_API_KEY: str = os.getenv("YELP_API_KEY", "")
+
+    # ------------------------------------------------------------------ #
     # CONTACT ENRICHMENT
     # ------------------------------------------------------------------ #
     ENRICHMENT_PROVIDER: str = os.getenv("ENRICHMENT_PROVIDER", "hunter")
@@ -123,7 +129,6 @@ class Settings:
     # ------------------------------------------------------------------ #
     # ALERTS
     # ------------------------------------------------------------------ #
-    SLACK_WEBHOOK_URL: str = os.getenv("SLACK_WEBHOOK_URL", "")
     ALERT_EMAIL: str = os.getenv("ALERT_EMAIL", "")
 
     # ------------------------------------------------------------------ #

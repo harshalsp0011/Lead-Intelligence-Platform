@@ -12,7 +12,6 @@ Dependencies:
 - `agents.scout.scout_agent`, `agents.analyst.analyst_agent`,
   `agents.writer.writer_agent`, `agents.outreach.outreach_agent`,
   `agents.tracker.tracker_agent` for agent run() entry points.
-- `config.settings.get_settings` for SLACK_WEBHOOK_URL.
 - `sqlalchemy.orm.Session` injected by caller.
 
 Usage:
@@ -28,7 +27,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import requests
 from sqlalchemy.orm import Session
 
 from config.settings import get_settings
@@ -125,7 +123,7 @@ def retry_failed_task(
     retry_count = entry.get("retry_count", 0)
 
     if retry_count >= 3:
-        _send_slack_alert(f"Task {task_id} failed 3 times")
+        logger.error("Task %s failed 3 times — max retries exhausted", task_id)
         return {"retried": False, "new_result": {"error": "Max retries (3) exceeded"}}
 
     entry["retry_count"] = retry_count + 1
@@ -223,15 +221,3 @@ def _dispatch(
     raise ValueError(f"Unhandled agent: {agent_name}")
 
 
-def _send_slack_alert(message: str) -> None:
-    """POST a plain-text alert to the configured Slack webhook."""
-    settings = get_settings()
-    webhook_url = getattr(settings, "SLACK_WEBHOOK_URL", None)
-    if not webhook_url:
-        print(f"[task_manager] Slack not configured. Alert: {message}")
-        return
-
-    try:
-        requests.post(webhook_url, json={"text": message}, timeout=5)
-    except requests.RequestException as exc:
-        print(f"[task_manager] Slack alert failed: {exc}")

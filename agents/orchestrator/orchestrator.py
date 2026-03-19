@@ -13,7 +13,6 @@ Purpose:
 Dependencies:
 - `agents.orchestrator.task_manager` for task dispatch, status, and retry.
 - `agents.analyst.enrichment_client` for per-company contact discovery.
-- `config.settings.get_settings` for SLACK_WEBHOOK_URL.
 - `sqlalchemy` session for lead_scores, email_drafts, and companies queries.
 
 Usage:
@@ -27,7 +26,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-import requests
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -350,30 +348,11 @@ def handle_agent_failure(
             )
             return "retried_successfully"
 
-    # All retries exhausted — send Slack alert.
+    # All retries exhausted — log the failure.
+    # Email notification will be sent by the email_notifier in Phase 4.
     alert_msg = (
         f"Agent '{agent_name}' failed after all retries. "
         f"task_id={task_id} error={error} params={task_params}"
     )
-    _send_slack_alert(alert_msg)
     logger.error(alert_msg)
     return "failed_after_retry"
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _send_slack_alert(message: str) -> None:
-    """POST a plain-text alert to the configured Slack webhook."""
-    settings = get_settings()
-    webhook_url = getattr(settings, "SLACK_WEBHOOK_URL", None)
-    if not webhook_url:
-        print(f"[orchestrator] Slack not configured. Alert: {message}")
-        return
-
-    try:
-        requests.post(webhook_url, json={"text": message}, timeout=5)
-    except requests.RequestException as exc:
-        logger.warning("Slack alert failed: %s", exc)

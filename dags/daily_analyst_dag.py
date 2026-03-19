@@ -25,7 +25,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-import requests
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from sqlalchemy import func, select
@@ -60,22 +59,6 @@ def db_session_scope() -> Iterator[Session]:
     finally:
         session.close()
 
-
-def _send_slack_message(message: str) -> bool:
-    """Post a plain-text Slack message when a webhook is configured."""
-    settings = get_settings()
-    webhook_url = str(getattr(settings, "SLACK_WEBHOOK_URL", "") or "").strip()
-    if not webhook_url:
-        logger.warning("Slack webhook not configured. Message was: %s", message)
-        return False
-
-    try:
-        response = requests.post(webhook_url, json={"text": message}, timeout=10)
-        response.raise_for_status()
-        return True
-    except requests.RequestException:
-        logger.exception("Failed to send Slack message")
-        return False
 
 
 def _format_currency(value: float) -> str:
@@ -303,7 +286,7 @@ def notify_analyst_complete(**context: Any) -> None:
         f"Leads awaiting approval: {pending}\n"
         "Review now: http://localhost:3000/leads"
     )
-    _send_slack_message(message)
+    logger.warning("Notification skipped — email notifier not yet implemented")
 
     task_instance.xcom_push(key=PIPELINE_VALUE_XCOM_KEY, value=pipeline_value)
     task_instance.xcom_push(key=PENDING_APPROVAL_COUNT_XCOM_KEY, value=pending)
