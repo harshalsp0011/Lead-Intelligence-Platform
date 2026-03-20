@@ -18,7 +18,8 @@
 
 // Configuration
 const BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8001';
-const REQUEST_TIMEOUT = 30000; // 30 seconds
+const REQUEST_TIMEOUT = 30000;       // 30 seconds — default
+const CHAT_TIMEOUT    = 180000;      // 3 minutes — Scout + Analyst can take a while
 
 /**
  * Fetch wrapper with error handling, timeout, and logging.
@@ -33,8 +34,9 @@ async function fetchAPI(endpoint, options = {}) {
     ...options.headers,
   };
 
+  const timeout = options.timeout || REQUEST_TIMEOUT;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   try {
     const response = await fetch(url, {
@@ -343,19 +345,29 @@ export async function fetchTopLeads(limit = 10) {
 }
 
 // ============================================================================
-// CHAT AGENT FUNCTION
+// CHAT AGENT FUNCTIONS
 // ============================================================================
 
 /**
- * Send a natural-language message to the chat agent.
+ * Start a chat run in the background — returns run_id immediately.
+ * The client should then poll fetchRunStatus + fetchChatResult.
  * @param {string} message - User message
- * @returns {Promise<object>} - { reply, data, run_id }
+ * @returns {Promise<object>} - { run_id, status: "started" }
  */
-export async function sendChatMessage(message) {
+export async function startChat(message) {
   return fetchAPI('/chat', {
     method: 'POST',
     body: JSON.stringify({ message }),
   });
+}
+
+/**
+ * Poll for the result of a background chat run.
+ * @param {string} runId - run_id returned by startChat
+ * @returns {Promise<object>} - { status: "pending"|"done"|"error", reply, data, run_id }
+ */
+export async function fetchChatResult(runId) {
+  return fetchAPI(`/chat/result/${runId}`);
 }
 
 // ============================================================================

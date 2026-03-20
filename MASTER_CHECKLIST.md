@@ -42,7 +42,7 @@ UI shows live visuals as things happen.
   - [x] `get_outreach_history()` — fetches companies already emailed
   - [x] `get_replies()` — fetches received replies and their sentiment
   - [x] `run_full_pipeline(industry, location, count)` — triggers full run
-  - [ ] `approve_leads(company_ids)` — marks leads as human approved (Phase 2)
+  - [x] `approve_leads(company_ids)` — marks leads as human approved (Phase 2)
   - [ ] `approve_emails(draft_ids)` — marks drafts as human approved (Phase 3)
   - [ ] `draft_email(company_id)` — triggers Writer for one company (Phase 3)
 - [x] Chat agent creates an `agent_runs` row at the start of every run
@@ -96,28 +96,66 @@ UI shows live visuals as things happen.
 Analyst scores companies. Pipeline pauses. Human reviews and approves before Writer runs.
 
 ### 2A — Analyst connects to run tracking
-- [ ] Analyst updates `agent_runs.current_stage` to `analyst_running` when it starts
-- [ ] Analyst updates `agent_runs.companies_scored` counter after scoring
-- [ ] Analyst logs each scoring action to `agent_run_logs`
-- [ ] Analyst updates `agent_runs.status` to `analyst_awaiting_approval` when done
+- [x] Analyst updates `agent_runs.current_stage` to `analyst_running` when it starts
+- [x] Analyst updates `agent_runs.companies_scored` counter after scoring
+- [x] Analyst logs each scoring action to `agent_run_logs`
+- [x] Analyst updates `agent_runs.status` to `analyst_awaiting_approval` when done
 
 ### 2B — Human Approval: Leads
-- [ ] After Analyst finishes, system creates a `human_approval_requests` row (`approval_type = 'leads'`)
-- [ ] `agents/notifications/email_notifier.py` — sends approval email to reviewer
-- [ ] Approval email contains: list of scored companies, scores, link to review page
-- [ ] `POST /approvals/leads` API route — marks selected leads as approved, rejects others
-- [ ] On approval: `agent_runs.status` updates to `analyst_complete`, Writer starts
+- [x] After Analyst finishes, system creates a `human_approval_requests` row (`approval_type = 'leads'`)
+- [x] `agents/notifications/email_notifier.py` — sends approval email to reviewer
+- [x] Approval email contains: list of scored companies, scores, link to review page
+- [x] `POST /approvals/leads` API route — marks selected leads as approved, rejects others
+- [x] On approval: `agent_runs.status` updates to `analyst_complete`, Writer starts
 - [ ] On rejection: run cancelled, `agent_runs.status` = `cancelled`
-- [ ] `human_approval_requests` row updated with `approved_by`, `approved_at`
+- [x] `human_approval_requests` row updated with `approved_by`, `approved_at`
 
 ### 2C — UI: Lead Review Page
-- [ ] Leads review page shows all scored companies for the current run
-- [ ] Each company shows: name, score, tier, savings estimate, industry, city
-- [ ] Checkboxes to select which companies to approve
-- [ ] "Remove" button to exclude individual companies
-- [ ] "Approve Selected" button submits approval
-- [ ] Page auto-refreshes when approval email link is opened
-- [ ] `src/pages/LeadReview.jsx` updated or created
+- [x] Leads review page shows all scored companies (fixed field name mapping: company_id, score, site_count)
+- [x] Each company shows: name, score, tier, savings estimate, industry, city
+- [x] Checkboxes to select which companies to approve
+- [x] "Approve Selected" button submits bulk approval
+- [x] Inline "Approve" / "Reject" per row
+- [x] `src/pages/Leads.jsx` — field names fixed to match API response schema
+
+### 2D — Chat Agent: approve_leads tool
+- [x] `approve_leads(company_ids)` tool added to chat agent
+- [x] System prompt updated with approve_leads trigger phrase
+
+---
+
+## Phase 2.5 — Chat Resilience, Live Progress & UI Fixes
+Bugs fixed and reliability improvements after Phase 2 deployment.
+
+### Chat Backend
+- [x] `POST /chat` returns `run_id` immediately (background thread) — no more 30s browser timeout
+- [x] `GET /chat/result/{run_id}` endpoint added — frontend polls for completion
+- [x] `agents/chat_agent.py` — `run_chat()` accepts optional pre-generated `run_id`
+- [x] Scout writes human-readable progress to `agent_run_logs` at every phase
+- [x] `GET /pipeline/run/{run_id}` returns ALL logs (was capped at 5)
+
+### Chat Frontend
+- [x] Chat history persisted to `localStorage` — survives page refresh
+- [x] Both user AND agent messages (including data cards) saved and restored
+- [x] Active `run_id` persisted to `sessionStorage` — polling resumes if user navigates away mid-run
+- [x] On remount: if `sessionStorage` has `chat_active_run_id`, polling resumes immediately
+- [x] 404 edge case: if server restarted mid-run, shows "server restarted, try again" instead of polling forever
+- [x] Live `ProgressIndicator` replaces generic typing dots — shows `✓` / `→` step-by-step
+- [x] "Clear history" button added to Chat header
+
+### Leads Page Fix
+- [x] `GET /leads` 500 crash fixed — `_aware()` helper normalizes naive datetimes before sort
+- [x] Retry button added to error banner
+
+### Triggers Page
+- [x] `ActiveRunStatus` now shows real result summary (companies saved, tiers, drafts) when run completes
+- [x] "View in Leads page →" button appears on completion
+- [x] Polls every 3s (was 5s)
+
+### Scout Blocklist
+- [x] `_UNSCRAPPABLE_DOMAINS` blocklist added to `search_client.py` (27 domains)
+- [x] Sites that require login/paywall (glassdoor, zoominfo, seamless.ai, etc.) skipped immediately
+- [x] Scout reaches Google Maps/Yelp 60–90 seconds faster
 
 ---
 

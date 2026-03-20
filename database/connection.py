@@ -16,7 +16,11 @@ from config.settings import get_settings
 
 settings = get_settings()
 
-engine = create_engine(settings.DATABASE_URL)
+engine = create_engine(
+    settings.DATABASE_URL,
+    pool_pre_ping=True,   # test connection before use — drops stale SSL connections silently
+    pool_recycle=300,     # recycle connections every 5 min (before RDS idle timeout)
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 _MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"

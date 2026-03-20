@@ -197,10 +197,18 @@ def _query_leads(
 
         rows.append(row)
 
+    def _aware(dt: Any) -> datetime:
+        """Return an offset-aware datetime — makes naive DB timestamps comparable."""
+        if not dt:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        if isinstance(dt, datetime) and dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
     if order_by == "score DESC":
         rows.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
     else:
-        rows.sort(key=lambda item: item.get("updated_at") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+        rows.sort(key=lambda item: _aware(item.get("updated_at")), reverse=True)
 
     total = len(rows)
     high = sum(1 for row in rows if row.get("tier") == TIER_HIGH)

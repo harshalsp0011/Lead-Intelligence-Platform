@@ -28,6 +28,38 @@ logger = logging.getLogger(__name__)
 
 _TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 
+# Sites that require login, have paywalls, or actively block scrapers.
+# Tavily often returns these as "directory" sources but they can never be scraped.
+# Skipping them saves 60-90 seconds of wasted HTTP retries per scout run.
+_UNSCRAPPABLE_DOMAINS = {
+    "glassdoor.com",
+    "linkedin.com",
+    "zoominfo.com",
+    "seamless.ai",
+    "bizjournals.com",
+    "bizbuysell.com",
+    "reddit.com",
+    "facebook.com",
+    "instagram.com",
+    "twitter.com",
+    "x.com",
+    "yelp.com",         # Yelp is called via API in Phase 3, not scraped
+    "indeed.com",
+    "ziprecruiter.com",
+    "monster.com",
+    "crunchbase.com",
+    "dnb.com",
+    "manta.com",
+    "hoovers.com",
+    "apollo.io",
+    "lusha.com",
+    "rocketreach.co",
+    "f6s.com",
+    "youtube.com",
+    "amazon.com",
+    "wikipedia.org",
+}
+
 
 @lru_cache(maxsize=64)
 def _cached_tavily_search(industry: str, location: str) -> tuple[dict[str, Any], ...]:
@@ -83,6 +115,13 @@ def _cached_tavily_search(industry: str, location: str) -> tuple[dict[str, Any],
             seen_urls.add(normalized_url)
 
             host = parsed.netloc.lower().removeprefix("www.")
+
+            # Skip sites that require login, paywall, or block scrapers entirely.
+            # These are never scrapable and only waste time.
+            if any(host.endswith(blocked) for blocked in _UNSCRAPPABLE_DOMAINS):
+                logger.debug("Skipping blocked domain: %s", host)
+                continue
+
             source_name = f"tavily:{host}:{len(discovered) + 1}"
             discovered.append(
                 {

@@ -21,6 +21,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   triggerFullPipeline,
   triggerScout,
@@ -368,9 +369,62 @@ function RunWriterOnlyCard({ onTrigger, isLoading, triggerStatus, pendingWriterC
 }
 
 /**
- * ActiveRunStatus: Live status with polling
+ * ResultSummary: Show what was saved after a run completes
  */
-function ActiveRunStatus({ triggerId, pollInterval = 5000 }) {
+function ResultSummary({ summary, runMode, navigate }) {
+  if (!summary) return null;
+
+  // Scout returns {company_ids: [...]}
+  // Full pipeline returns {companies_found, scored_high, scored_medium, contacts_found, drafts_created}
+  const companiesFound = summary.companies_found ?? summary.company_ids?.length ?? 0;
+  const scoredHigh = summary.scored_high ?? 0;
+  const scoredMedium = summary.scored_medium ?? 0;
+  const drafts = summary.drafts_created ?? 0;
+  const contacts = summary.contacts_found ?? 0;
+
+  return (
+    <div className="mt-3 bg-white border border-green-200 rounded-lg p-4">
+      <p className="text-sm font-semibold text-green-800 mb-2">Run Results</p>
+      <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm text-gray-700">
+        <span>Companies saved:</span>
+        <span className="font-semibold text-green-700">{companiesFound}</span>
+        {(scoredHigh > 0 || scoredMedium > 0) && (
+          <>
+            <span>High tier:</span>
+            <span className="font-semibold text-green-700">{scoredHigh}</span>
+            <span>Medium tier:</span>
+            <span className="font-semibold text-yellow-700">{scoredMedium}</span>
+          </>
+        )}
+        {contacts > 0 && (
+          <>
+            <span>Contacts found:</span>
+            <span className="font-semibold">{contacts}</span>
+          </>
+        )}
+        {drafts > 0 && (
+          <>
+            <span>Email drafts:</span>
+            <span className="font-semibold">{drafts}</span>
+          </>
+        )}
+      </div>
+      {companiesFound > 0 && (
+        <button
+          onClick={() => navigate('/leads')}
+          className="mt-3 px-4 py-1.5 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition"
+        >
+          View in Leads page →
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * ActiveRunStatus: Live status with polling, shows result summary on completion
+ */
+function ActiveRunStatus({ triggerId, pollInterval = 3000, navigate }) {
   const [status, setStatus] = useState(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const pollingRef = useRef(null);
@@ -381,15 +435,10 @@ function ActiveRunStatus({ triggerId, pollInterval = 5000 }) {
 
     const startTime = Date.now();
 
-    /**
-     * Poll trigger status
-     */
     const pollStatus = async () => {
       try {
         const data = await fetchTriggerStatus(triggerId);
         setStatus(data);
-
-        // Stop polling if completed or failed
         if (data.status === 'completed' || data.status === 'failed') {
           clearInterval(pollingRef.current);
           clearInterval(timerRef.current);
@@ -399,13 +448,8 @@ function ActiveRunStatus({ triggerId, pollInterval = 5000 }) {
       }
     };
 
-    // Initial poll
     pollStatus();
-
-    // Poll every N seconds
     pollingRef.current = setInterval(pollStatus, pollInterval);
-
-    // Update elapsed time every second
     timerRef.current = setInterval(() => {
       setElapsedTime(Math.floor((Date.now() - startTime) / 1000));
     }, 1000);
@@ -418,26 +462,38 @@ function ActiveRunStatus({ triggerId, pollInterval = 5000 }) {
 
   if (!status) return null;
 
-  const statusColorMap = {
-    starting: 'bg-yellow-50 border-yellow-200 text-yellow-900',
-    running: 'bg-blue-50 border-blue-200 text-blue-900',
-    completed: 'bg-green-50 border-green-200 text-green-900',
-    failed: 'bg-red-50 border-red-200 text-red-900',
+  const colorMap = {
+    running: 'bg-blue-50 border-blue-300 text-blue-900',
+    completed: 'bg-green-50 border-green-300 text-green-900',
+    failed: 'bg-red-50 border-red-300 text-red-900',
   };
-
-  const colorClass = statusColorMap[status.status] || 'bg-gray-50 border-gray-200 text-gray-900';
+  const colorClass = colorMap[status.status] || 'bg-gray-50 border-gray-200 text-gray-900';
 
   return (
     <div className={`p-4 border rounded-lg ${colorClass} mb-6`}>
-      <div className="flex justify-between items-start mb-2">
-        <p className="font-bold text-lg">Active Run: {status.stage || 'Pipeline'}</p>
-        <p className="text-sm font-semibold">{formatElapsedTime(elapsedTime)}</p>
+      <div className="flex justify-between items-center mb-1">
+        <p className="font-bold">
+          {status.status === 'running' && '⏳ Running…'}
+          {status.status === 'completed' && '✅ Completed'}
+          {status.status === 'failed' && '❌ Failed'}
+        </p>
+        <p className="text-sm font-mono">{formatElapsedTime(elapsedTime)}</p>
       </div>
-      <p className="text-sm mb-2">
-        Status: <span className="font-semibold uppercase">{status.status}</span>
-      </p>
-      {status.progress && (
-        <p className="text-sm">{status.progress}</p>
+
+      {status.status === 'running' && (
+        <p className="text-sm">Agent is working — check back in a moment</p>
+      )}
+
+      {status.status === 'failed' && (
+        <p className="text-sm text-red-700 mt-1">{status.error_message || 'Unknown error'}</p>
+      )}
+
+      {status.status === 'completed' && (
+        <ResultSummary
+          summary={status.result_summary}
+          runMode={status.run_mode}
+          navigate={navigate}
+        />
       )}
     </div>
   );
@@ -451,6 +507,7 @@ function ActiveRunStatus({ triggerId, pollInterval = 5000 }) {
  * Triggers: Pipeline control page
  */
 export default function Triggers() {
+  const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [activeTrigger, setActiveTrigger] = useState(null);
@@ -543,7 +600,7 @@ export default function Triggers() {
         )}
 
         {activeTrigger && (
-          <ActiveRunStatus triggerId={activeTrigger} />
+          <ActiveRunStatus triggerId={activeTrigger} navigate={navigate} />
         )}
 
         <RunFullPipelineCard

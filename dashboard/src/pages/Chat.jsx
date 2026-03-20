@@ -2,8 +2,10 @@
  * Chat Page
  *
  * Conversational interface to the agent backend.
- * User types natural language — agent picks the right tool and returns
- * a text reply plus structured data rendered as inline cards.
+ * Uses a background-task + polling approach:
+ *   1. POST /chat  → run_id returned immediately
+ *   2. Poll /pipeline/run/{run_id} every 2 s → show live progress steps
+ *   3. Poll /chat/result/{run_id}  every 2 s → show final reply when done
  *
  * Examples:
  *   "find 10 healthcare companies in Buffalo NY"
@@ -13,8 +15,8 @@
  *   "run the full pipeline for manufacturing in Buffalo"
  */
 
-import React, { useState, useRef, useEffect } from 'react';
-import { sendChatMessage } from '../services/api';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { startChat, fetchChatResult, fetchRunStatus } from '../services/api';
 
 // ---------------------------------------------------------------------------
 // Quick-prompt suggestions shown before first message
@@ -234,21 +236,41 @@ function Message({ msg }) {
 }
 
 // ---------------------------------------------------------------------------
-// Typing indicator
+// Live progress indicator — shows step-by-step agent activity
 // ---------------------------------------------------------------------------
-function TypingIndicator() {
+function ProgressIndicator({ steps }) {
   return (
     <div className="flex items-start mb-4">
       <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold mr-2 flex-shrink-0">
         A
       </div>
-      <div className="bg-white border border-slate-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
-        <div className="flex gap-1.5 items-center">
-          <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-          <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-          <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+      <div className="bg-white border border-slate-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm max-w-sm">
+        {/* Bounce dots */}
+        <div className="flex gap-1.5 items-center mb-2">
+          <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+          <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+          <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
           <span className="text-xs text-slate-400 ml-1">Agent is working…</span>
         </div>
+        {/* Progress steps */}
+        {steps.length > 0 && (
+          <div className="space-y-1 border-t border-slate-100 pt-2">
+            {steps.map((step, i) => {
+              const isLatest = i === steps.length - 1;
+              return (
+                <p
+                  key={i}
+                  className={`text-xs flex items-start gap-1.5 ${
+                    isLatest ? 'text-slate-700 font-medium' : 'text-slate-400'
+                  }`}
+                >
+                  <span className="mt-0.5 flex-shrink-0">{isLatest ? '→' : '✓'}</span>
+                  <span>{step}</span>
+                </p>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -257,54 +279,150 @@ function TypingIndicator() {
 // ---------------------------------------------------------------------------
 // Main Chat page
 // ---------------------------------------------------------------------------
+const WELCOME_MESSAGE = {
+  id: 0,
+  role: 'agent',
+  content: "Hi! I'm your lead intelligence agent. Ask me to find companies, show leads, check replies, or run the full pipeline.",
+  data: null,
+};
+
 export default function Chat() {
-  const [messages, setMessages] = useState([
-    {
-      id: 0,
-      role: 'agent',
-      content: "Hi! I'm your lead intelligence agent. Ask me to find companies, show leads, check replies, or run the full pipeline.",
-      data: null,
-    },
-  ]);
+  const [messages, setMessages] = useState(() => {
+    try {
+      const saved = localStorage.getItem('chat_messages');
+      return saved ? JSON.parse(saved) : [WELCOME_MESSAGE];
+    } catch {
+      return [WELCOME_MESSAGE];
+    }
+  });
   const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
+  // If there's a run_id saved in sessionStorage, we were mid-run when user left
+  const [loading, setLoading] = useState(
+    () => !!sessionStorage.getItem('chat_active_run_id')
+  );
+  const [progressSteps, setProgressSteps] = useState([]);
+  const pollingRef = useRef(null);
   const bottomRef = useRef(null);
+
+  // Persist all messages (both sides) to localStorage whenever they change
+  useEffect(() => {
+    try {
+      localStorage.setItem('chat_messages', JSON.stringify(messages));
+    } catch {
+      // localStorage full — silently skip
+    }
+  }, [messages]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading]);
+  }, [messages, loading, progressSteps]);
+
+  // Stop polling on unmount — but the run_id stays in sessionStorage
+  // so when the user comes back, polling resumes automatically
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) clearTimeout(pollingRef.current);
+    };
+  }, []);
+
+  const stopPolling = useCallback(() => {
+    if (pollingRef.current) {
+      clearTimeout(pollingRef.current);
+      pollingRef.current = null;
+    }
+    sessionStorage.removeItem('chat_active_run_id');
+  }, []);
+
+  const finishRun = useCallback((reply, data, runId) => {
+    stopPolling();
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: Date.now(),
+        role: 'agent',
+        content: reply || 'Done.',
+        data: data || null,
+        runId,
+      },
+    ]);
+    setProgressSteps([]);
+    setLoading(false);
+  }, [stopPolling]);
+
+  const pollRun = useCallback(async (runId) => {
+    try {
+      const [runStatus, chatResult] = await Promise.allSettled([
+        fetchRunStatus(runId),
+        fetchChatResult(runId),
+      ]);
+
+      // Update live progress steps from DB logs
+      if (runStatus.status === 'fulfilled' && runStatus.value?.recent_logs) {
+        const steps = runStatus.value.recent_logs
+          .map((lg) => lg.output_summary)
+          .filter(Boolean);
+        setProgressSteps(steps);
+      }
+
+      if (chatResult.status === 'fulfilled') {
+        const result = chatResult.value;
+        if (result.status === 'done' || result.status === 'error') {
+          finishRun(result.reply, result.data, result.run_id);
+          return;
+        }
+        // Still pending — keep polling
+        pollingRef.current = setTimeout(() => pollRun(runId), 2000);
+      } else {
+        // fetchChatResult rejected — most likely 404 (server restarted)
+        const msg = chatResult.reason?.message || '';
+        if (msg.includes('404') || msg.includes('not found') || msg.includes('expired')) {
+          finishRun(
+            'The agent was still running when the server restarted. Please try your request again.',
+            null,
+            runId,
+          );
+        } else {
+          // Network hiccup — retry
+          pollingRef.current = setTimeout(() => pollRun(runId), 3000);
+        }
+      }
+    } catch {
+      pollingRef.current = setTimeout(() => pollRun(runId), 3000);
+    }
+  }, [finishRun]);
+
+  // On mount: if there was an active run when user navigated away, resume polling
+  useEffect(() => {
+    const savedRunId = sessionStorage.getItem('chat_active_run_id');
+    if (savedRunId) {
+      pollingRef.current = setTimeout(() => pollRun(savedRunId), 500);
+    }
+  }, [pollRun]);
 
   async function handleSend(text) {
     const message = (text || input).trim();
     if (!message || loading) return;
 
     setInput('');
+    setProgressSteps([]);
     setMessages((prev) => [...prev, { id: Date.now(), role: 'user', content: message }]);
     setLoading(true);
 
     try {
-      const result = await sendChatMessage(message);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now() + 1,
-          role: 'agent',
-          content: result.reply,
-          data: result.data,
-          runId: result.run_id,
-        },
-      ]);
+      const { run_id } = await startChat(message);
+      // Persist run_id so polling can resume if user navigates away and back
+      sessionStorage.setItem('chat_active_run_id', run_id);
+      pollingRef.current = setTimeout(() => pollRun(run_id), 1000);
     } catch (err) {
       setMessages((prev) => [
         ...prev,
         {
           id: Date.now() + 1,
           role: 'agent',
-          content: 'Sorry, I could not reach the API server. Make sure the API is running.',
+          content: 'Could not start the agent — make sure the API is running (docker compose up).',
           data: null,
         },
       ]);
-    } finally {
       setLoading(false);
     }
   }
@@ -321,9 +439,23 @@ export default function Chat() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="bg-white border-b border-slate-200 px-6 py-4 flex-shrink-0">
-        <h1 className="text-lg font-semibold text-slate-800">Chat Agent</h1>
-        <p className="text-sm text-slate-500">Ask in natural language — agent decides what to do</p>
+      <div className="bg-white border-b border-slate-200 px-6 py-4 flex-shrink-0 flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-semibold text-slate-800">Chat Agent</h1>
+          <p className="text-sm text-slate-500">Ask in natural language — agent decides what to do</p>
+        </div>
+        <button
+          onClick={() => {
+            stopPolling();
+            localStorage.removeItem('chat_messages');
+            setMessages([WELCOME_MESSAGE]);
+            setLoading(false);
+            setProgressSteps([]);
+          }}
+          className="text-xs text-slate-400 hover:text-slate-600 border border-slate-200 px-3 py-1.5 rounded-lg hover:border-slate-400 transition-colors"
+        >
+          Clear history
+        </button>
       </div>
 
       {/* Messages */}
@@ -332,7 +464,7 @@ export default function Chat() {
           <Message key={msg.id} msg={msg} />
         ))}
 
-        {loading && <TypingIndicator />}
+        {loading && <ProgressIndicator steps={progressSteps} />}
 
         {/* Quick suggestions */}
         {showSuggestions && !loading && (

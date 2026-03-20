@@ -138,7 +138,7 @@ def get_run_status(run_id: UUID, db: Session = Depends(get_db)) -> dict[str, Any
     logs = db.execute(
         select(AgentRunLog)
         .where(AgentRunLog.run_id == run_id)
-        .order_by(AgentRunLog.created_at.asc())
+        .order_by(AgentRunLog.logged_at.asc())
     ).scalars().all()
 
     return {
@@ -152,7 +152,6 @@ def get_run_status(run_id: UUID, db: Session = Depends(get_db)) -> dict[str, Any
         "drafts_created": run.drafts_created,
         "emails_sent": run.emails_sent,
         "started_at": run.created_at.isoformat() if run.created_at else None,
-        "updated_at": run.updated_at.isoformat() if run.updated_at else None,
         "error_message": run.error_message,
         "log_count": len(logs),
         "recent_logs": [
@@ -161,8 +160,8 @@ def get_run_status(run_id: UUID, db: Session = Depends(get_db)) -> dict[str, Any
                 "action": lg.action,
                 "status": lg.status,
                 "output_summary": lg.output_summary,
-                "created_at": lg.created_at.isoformat() if lg.created_at else None,
+                "logged_at": lg.logged_at.isoformat() if lg.logged_at else None,
             }
-            for lg in logs[-5:]  # last 5 log entries
+            for lg in logs  # all log entries — used for live progress display
         ],
     }

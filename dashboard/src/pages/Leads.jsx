@@ -348,7 +348,7 @@ function LeadsTable({
                 <input
                   type="checkbox"
                   onChange={(e) => onSelectAll(e.target.checked)}
-                  checked={leads.length > 0 && leads.every((l) => selectedLeads.includes(l.id))}
+                  checked={leads.length > 0 && leads.every((l) => selectedLeads.includes(l.company_id))}
                 />
               </th>
               <th
@@ -370,18 +370,18 @@ function LeadsTable({
             </tr>
           </thead>
           <tbody>
-            {leads.map((lead, idx) => (
-              <tr key={lead.id} className="border-b hover:bg-gray-50">
+            {leads.map((lead) => (
+              <tr key={lead.company_id} className="border-b hover:bg-gray-50">
                 <td className="px-4 py-3">
                   <input
                     type="checkbox"
-                    checked={selectedLeads.includes(lead.id)}
-                    onChange={(e) => onSelectLead(lead.id, e.target.checked)}
+                    checked={selectedLeads.includes(lead.company_id)}
+                    onChange={(e) => onSelectLead(lead.company_id, e.target.checked)}
                   />
                 </td>
                 <td className="px-4 py-3">
                   <button
-                    onClick={() => onViewLead(lead.id)}
+                    onClick={() => onViewLead(lead.company_id)}
                     className="font-semibold text-blue-600 hover:underline"
                   >
                     {lead.company_name}
@@ -389,21 +389,21 @@ function LeadsTable({
                 </td>
                 <td className="px-4 py-3 text-sm text-gray-700">{lead.industry || '—'}</td>
                 <td className="px-4 py-3 text-sm text-gray-700">{lead.state || '—'}</td>
-                <td className="px-4 py-3 text-sm text-gray-700">{lead.estimated_sites || '—'}</td>
+                <td className="px-4 py-3 text-sm text-gray-700">{lead.site_count || '—'}</td>
                 <td className="px-4 py-3 text-sm text-gray-700">
-                  {formatCurrency(lead.estimated_annual_spend)}
+                  {lead.savings_mid_formatted || formatCurrency(lead.estimated_total_spend)}
                 </td>
                 <td className="px-4 py-3 text-sm text-gray-700">
-                  {formatCurrency(lead.estimated_savings_range)}
+                  {lead.savings_mid_formatted || formatCurrency(lead.savings_mid)}
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold">{lead.lead_score || '—'}</span>
-                    {lead.lead_score && (
+                    <span className="text-sm font-semibold">{lead.score || '—'}</span>
+                    {lead.score && (
                       <div className="w-16 bg-gray-200 rounded-full h-2">
                         <div
                           className="bg-blue-600 h-2 rounded-full"
-                          style={{ width: `${lead.lead_score}%` }}
+                          style={{ width: `${lead.score}%` }}
                         />
                       </div>
                     )}
@@ -428,14 +428,14 @@ function LeadsTable({
                 </td>
                 <td className="px-4 py-3 text-sm flex gap-2">
                   <button
-                    onClick={() => onViewLead(lead.id)}
+                    onClick={() => onViewLead(lead.company_id)}
                     className="text-blue-600 hover:underline"
                   >
                     View
                   </button>
                   {lead.tier === 'high' && lead.status !== 'approved' && (
                     <button
-                      onClick={() => onApproveLead(lead.id)}
+                      onClick={() => onApproveLead(lead.company_id)}
                       className="text-green-600 hover:underline"
                     >
                       Approve
@@ -443,7 +443,7 @@ function LeadsTable({
                   )}
                   {lead.status !== 'rejected' && (
                     <button
-                      onClick={() => onRejectLead(lead.id)}
+                      onClick={() => onRejectLead(lead.company_id)}
                       className="text-red-600 hover:underline"
                     >
                       Reject
@@ -561,7 +561,7 @@ export default function Leads() {
     setError(null);
     try {
       const response = await fetchLeads(filterParams);
-      setLeads(response.data || []);
+      setLeads(response.leads || []);
       setPagination({
         page: response.page || 1,
         page_size: response.page_size || 25,
@@ -642,7 +642,7 @@ export default function Leads() {
    */
   const handleSelectAll = (checked) => {
     if (checked) {
-      setSelectedLeads(leads.map((l) => l.id));
+      setSelectedLeads(leads.map((l) => l.company_id));
     } else {
       setSelectedLeads([]);
     }
@@ -664,7 +664,7 @@ export default function Leads() {
    */
   const handleBulkApprove = async () => {
     const highLeads = leads.filter(
-      (l) => selectedLeads.includes(l.id) && l.tier === 'high'
+      (l) => selectedLeads.includes(l.company_id) && l.tier === 'high'
     );
 
     try {
@@ -721,7 +721,7 @@ export default function Leads() {
    * Get high leads count from selected
    */
   const highLeadsSelected = leads
-    .filter((l) => selectedLeads.includes(l.id) && l.tier === 'high')
+    .filter((l) => selectedLeads.includes(l.company_id) && l.tier === 'high')
     .length;
 
   return (
@@ -732,8 +732,14 @@ export default function Leads() {
 
         {/* Error Alert */}
         {error && (
-          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg mb-6">
-            {error}
+          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg mb-6 flex items-center justify-between">
+            <span>{error}</span>
+            <button
+              onClick={() => loadLeads()}
+              className="ml-4 px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-sm font-medium"
+            >
+              Retry
+            </button>
           </div>
         )}
 

@@ -6,6 +6,7 @@ This module coordinates analysis, scoring, and persistence for one company at a
 time, and can batch-process a list of company IDs.
 """
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -15,7 +16,9 @@ from sqlalchemy.orm import Session
 
 from agents.analyst import savings_calculator, score_engine, spend_calculator
 from agents.scout import website_crawler
-from database.orm_models import Company, CompanyFeature, Contact, LeadScore
+from database.orm_models import AgentRun, AgentRunLog, Company, CompanyFeature, Contact, LeadScore
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_uuid(value: str, label: str = "id") -> uuid.UUID:
@@ -24,6 +27,31 @@ def _parse_uuid(value: str, label: str = "id") -> uuid.UUID:
         return uuid.UUID(str(value))
     except (ValueError, AttributeError) as exc:
         raise ValueError(f"Invalid {label}: {value!r}") from exc
+
+
+def _log_action(
+    db: Session,
+    run_id: uuid.UUID,
+    action: str,
+    status: str,
+    output_summary: str = "",
+    duration_ms: int | None = None,
+    error_message: str | None = None,
+) -> None:
+    """Append one row to agent_run_logs for analyst actions."""
+    entry = AgentRunLog(
+        id=uuid.uuid4(),
+        run_id=run_id,
+        agent="analyst",
+        action=action,
+        status=status,
+        output_summary=output_summary,
+        duration_ms=duration_ms,
+        error_message=error_message,
+        logged_at=datetime.now(timezone.utc),
+    )
+    db.add(entry)
+    db.commit()
 
 _DEREGULATED_STATES = {
     "NY",
@@ -44,16 +72,60 @@ _DEREGULATED_STATES = {
 }
 
 
-def run(company_ids: list[str], db_session: Session) -> list[str]:
+def run(
+    company_ids: list[str],
+    db_session: Session,
+    run_id: uuid.UUID | None = None,
+) -> list[str]:
     """Process a list of company IDs and return those scored successfully."""
+    import time
+
+    # Update run status to analyst_running
+    if run_id is not None:
+        agent_run = db_session.get(AgentRun, run_id)
+        if agent_run:
+            agent_run.current_stage = "analyst"
+            agent_run.status = "analyst_running"
+            db_session.commit()
+
     processed_ids: list[str] = []
 
     for company_id in company_ids:
+        start = time.time()
         try:
             process_one_company(company_id, db_session)
             processed_ids.append(company_id)
-        except Exception:
+            duration = int((time.time() - start) * 1000)
+
+            if run_id is not None:
+                agent_run = db_session.get(AgentRun, run_id)
+                if agent_run:
+                    agent_run.companies_scored = len(processed_ids)
+                    db_session.commit()
+                _log_action(
+                    db_session, run_id, "score_company", "success",
+                    output_summary=f"Scored company {company_id}",
+                    duration_ms=duration,
+                )
+        except Exception as exc:
             db_session.rollback()
+            logger.warning("Failed to score company %s: %s", company_id, exc)
+            if run_id is not None:
+                _log_action(
+                    db_session, run_id, "score_company", "failure",
+                    error_message=str(exc),
+                )
+
+    # Mark analyst stage complete
+    if run_id is not None:
+        agent_run = db_session.get(AgentRun, run_id)
+        if agent_run:
+            agent_run.status = "analyst_awaiting_approval"
+            db_session.commit()
+        _log_action(
+            db_session, run_id, "analyst_complete", "success",
+            output_summary=f"Scored {len(processed_ids)} of {len(company_ids)} companies",
+        )
 
     return processed_ids
 

@@ -16,8 +16,10 @@ the agent decides what to do, and results appear inline as cards.
 6. [Quick Start](#6-quick-start)
 7. [Configuration Reference](#7-configuration-reference)
 8. [Dashboard Pages](#8-dashboard-pages)
-9. [API Reference](#9-api-reference)
-10. [Troubleshooting](#10-troubleshooting)
+9. [Observability & Monitoring](#9-observability--monitoring)
+10. [Database Tables](#10-database-tables)
+11. [API Reference](#11-api-reference)
+12. [Troubleshooting](#12-troubleshooting)
 
 ---
 
@@ -174,6 +176,7 @@ UI renders: text bubble + 5 CompanyCards inline
 | `get_outreach_history` | "who did we email", "already contacted" | SQL: outreach_events WHERE type=sent |
 | `get_replies` | "any replies", "who replied", "interested" | SQL: outreach_events WHERE type=replied |
 | `run_full_pipeline` | "run full pipeline", "start everything" | Scout → Analyst → Writer chain |
+| `approve_leads` | "approve these leads", "approve company X" | Updates lead_scores.approved_human=True, status=approved |
 
 ### Scout Agent — Company Discovery
 
@@ -196,6 +199,33 @@ After every run, `source_performance` table is updated — Scout learns which so
 perform best per industry/location and tries the best one first next time.
 
 Duplicate check per company: domain normalization match → name+city fallback.
+
+### Analyst Agent — Company Scoring
+
+After Scout finds companies, Analyst scores each one 0–100 using 4 weighted factors:
+
+```
+Score = (Recovery × 0.40) + (Industry × 0.25) + (Multisite × 0.20) + (Data Quality × 0.15)
+```
+
+| Factor | What it measures | Max contribution |
+|---|---|---|
+| Recovery | Estimated savings Troy & Banks can recover (utility + telecom spend × 24% fee) | 40 pts |
+| Industry fit | Energy intensity of the industry (healthcare/hospitality = best) | 25 pts |
+| Multisite | More locations = more spend to recover | 20 pts |
+| Data quality | Website present, contacts found, employee count known | 15 pts |
+
+Tier assignment: **≥70 = high**, **40–69 = medium**, **<40 = low**.
+Writer only generates emails for **high + human-approved** companies.
+
+After scoring, the system:
+1. Creates a `human_approval_requests` row in DB
+2. Sends a SendGrid email to `ALERT_EMAIL` listing all scored companies
+3. Sets `agent_runs.status = analyst_awaiting_approval`
+
+Reviewer opens the **Leads page** (`/leads`), checks the score/tier/savings table, and clicks Approve or Reject.
+
+Full details: `docs/PHASE2_ANALYST_APPROVAL.md`
 
 ### Agent Learning Tables
 
@@ -248,8 +278,8 @@ Every tool call appends one `agent_run_logs` row — full audit trail of every a
 |---|---|---|
 | **0** | Database schema — run tracking, learning, approval tables | ✅ Complete |
 | **1** | Chat agent + Scout (4 sources) + full React dashboard + Docker | ✅ Complete |
-| **2** | Analyst scoring + human lead review checkpoint | 🔲 Next |
-| **3** | Writer + email quality critic + human email review checkpoint | 🔲 Planned |
+| **2** | Analyst scoring + human lead review + approval notifications | ✅ Complete |
+| **3** | Writer + email quality critic + human email review checkpoint | 🔲 Next |
 | **4** | Outreach sending + Tracker + auto reply email alerts | 🔲 Planned |
 | **5** | Airflow scheduled runs with approval pause points | 🔲 Planned |
 | **6** | Learning activation (source ranking + template selection) | 🔲 Planned |
@@ -257,10 +287,14 @@ Every tool call appends one `agent_run_logs` row — full audit trail of every a
 
 See `MASTER_CHECKLIST.md` for detailed item-by-item progress.
 
-**What works right now (Phase 1):**
+**What works right now (Phase 1 + 2):**
 - Chat → Ollama → tool routing → DB queries or Scout run
+- Chat: `"approve these leads"` → `approve_leads` tool → marks leads approved in DB
 - Scout Live page — trigger a search, watch companies appear in real time
-- Leads page — filter and review all stored companies
+- Leads page — filter, review, approve/reject leads with correct score + savings data
+- Analyst scoring — runs after Scout, scores each company 0–100, assigns high/medium/low tier
+- Approval email — SendGrid notification sent to `ALERT_EMAIL` after Analyst finishes
+- `POST /approvals/leads` — bulk approve/reject via API, pipeline continues to Writer
 - Email Review page — approve/reject/edit drafted emails
 - Pipeline page — health dashboard for all services
 - Reports page — weekly summary and top leads chart
@@ -402,7 +436,140 @@ All config is read from `.env`. Copy `.env.example` to `.env` and fill in values
 
 ---
 
-## 9. API Reference
+## 9. Observability & Monitoring
+
+Three ways to see what the agent is doing, from quickest to most detailed.
+
+### Option 1 — Docker Logs (always available)
+
+```bash
+docker logs lead-api -f
+```
+
+Shows HTTP requests, errors, and when tracing is enabled or disabled at startup.
+Every chat message logs the run_id and tool calls at INFO level.
+
+### Option 2 — LangSmith (recommended — visual trace per message)
+
+LangSmith is LangChain's purpose-built tracing dashboard. It shows every LLM call,
+which tool the agent chose, what arguments were passed, token counts, and latency —
+all in a visual timeline.
+
+**Setup (one time):**
+
+1. Sign up free at **https://smith.langchain.com**
+2. Go to Settings → API Keys → Create API Key
+3. Add your key to `.env`:
+
+```env
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=ls__your_key_here
+LANGCHAIN_PROJECT=utility-lead-platform
+```
+
+4. Rebuild and restart the API:
+
+```bash
+docker build -f api/Dockerfile -t utility-lead-api . && docker restart lead-api
+```
+
+**What you see per chat message:**
+
+```
+smith.langchain.com → Projects → utility-lead-platform
+
+  Trace: "find 10 healthcare companies in Buffalo NY"
+  ├── [llm]   ChatOllama          1.2s   → chose search_companies tool
+  ├── [tool]  search_companies    4.8s   → found=5, industry=healthcare
+  └── [llm]   ChatOllama          0.9s   → wrote final reply
+       Total: 6.9s | 312 tokens in | 48 tokens out
+```
+
+**Login:** https://smith.langchain.com → sign in with your account → Projects tab → `utility-lead-platform`
+
+### Option 3 — Database Query (audit trail)
+
+Every tool call and run is persisted in PostgreSQL. Query any time:
+
+```sql
+-- Last 10 agent runs with status
+SELECT id, trigger_source, status, current_stage,
+       companies_found, error_message, created_at
+FROM agent_runs
+ORDER BY created_at DESC LIMIT 10;
+
+-- Every tool call in a specific run
+SELECT agent, action, status, output_summary, duration_ms
+FROM agent_run_logs
+WHERE run_id = '<paste-run-id-from-chat>'
+ORDER BY logged_at ASC;
+
+-- All failed runs
+SELECT id, error_message, created_at
+FROM agent_runs
+WHERE status = 'failed'
+ORDER BY created_at DESC;
+```
+
+Or via the API (no DB client needed):
+```
+GET http://localhost:8001/pipeline/run/{run_id}
+```
+
+---
+
+## 10. Database Tables
+
+All tables live in the external PostgreSQL (AWS RDS). Migrations are in `database/migrations/`.
+
+### Core Data Tables
+
+| Table | Purpose | Key columns |
+|---|---|---|
+| `companies` | Every company Scout finds | `id`, `name`, `industry`, `city`, `website`, `source`, `status`, `run_id`, `quality_score` |
+| `company_features` | Enrichment signals per company | `company_id`, `employee_count`, `location_count`, `utility_spend_estimate` |
+| `lead_scores` | Analyst scoring output | `company_id`, `score`, `tier` (high/medium/low), `approved_human`, `approved_by` |
+| `contacts` | Decision-maker contacts per company | `company_id`, `name`, `email`, `title`, `phone` |
+| `email_drafts` | Writer-generated email drafts | `company_id`, `subject_line`, `body`, `approved`, `approved_by`, `sent_at` |
+| `outreach_events` | Every email sent, opened, replied | `company_id`, `event_type`, `event_at`, `reply_sentiment`, `reply_content` |
+
+### Run Tracking Tables
+
+| Table | Purpose | Key columns |
+|---|---|---|
+| `agent_runs` | One row per pipeline run (chat or Airflow) | `id`, `trigger_source`, `status`, `current_stage`, `companies_found`, `drafts_created`, `started_at` |
+| `agent_run_logs` | Step-by-step audit log per run | `run_id`, `agent`, `action`, `status`, `output_summary`, `duration_ms` |
+| `human_approval_requests` | Human-in-loop queue | `run_id`, `approval_type` (leads/emails), `status` (pending/approved/rejected), `approved_by` |
+
+### Learning Tables
+
+| Table | Purpose | Who writes | Who reads |
+|---|---|---|---|
+| `source_performance` | Quality score per Scout source per industry/location | Scout (after each run) | Scout (next run — ranks sources best-first) |
+| `email_win_rate` | Open/reply rate per email template per industry | Tracker (after reply events) | Writer (before drafting — picks best template) |
+
+### Migration Files
+
+```
+database/migrations/
+  001_create_companies.sql
+  002_create_contacts.sql
+  003_create_company_features.sql
+  004_create_lead_scores.sql
+  005_create_email_drafts.sql
+  006_create_outreach_events.sql
+  007_create_directory_sources.sql
+  008_create_agent_runs.sql           ← run tracking
+  009_create_agent_run_logs.sql       ← audit log
+  010_create_source_performance.sql   ← Scout learning
+  011_create_email_win_rate.sql       ← Writer learning
+  012_create_human_approval_requests.sql  ← human-in-loop queue
+  013_alter_companies_add_run_id.sql  ← links companies to runs
+```
+
+---
+
+## 11. API Reference
 
 Full Swagger docs at `http://localhost:8001/docs`. Key endpoints:
 
@@ -410,12 +577,15 @@ Full Swagger docs at `http://localhost:8001/docs`. Key endpoints:
 |---|---|---|
 | `POST` | `/chat` | Send a message to the chat agent |
 | `GET` | `/leads` | Fetch leads with optional filters |
-| `PATCH` | `/leads/{id}/approve` | Approve a lead |
-| `PATCH` | `/leads/{id}/reject` | Reject a lead |
+| `PATCH` | `/leads/{id}/approve` | Approve a single lead |
+| `PATCH` | `/leads/{id}/reject` | Reject a single lead |
+| `POST` | `/approvals/leads` | Bulk approve/reject leads for a run (Phase 2) |
+| `GET` | `/approvals/leads` | List pending lead approval requests (Phase 2) |
 | `GET` | `/emails/pending` | Fetch unapproved email drafts |
 | `PATCH` | `/emails/{id}/approve` | Approve an email draft |
 | `PATCH` | `/emails/{id}/edit` | Edit subject/body of a draft |
 | `POST` | `/trigger/scout` | Trigger Scout only (background) |
+| `POST` | `/trigger/analyst` | Trigger Analyst scoring for all unscored companies |
 | `POST` | `/trigger/full` | Trigger full pipeline (background) |
 | `GET` | `/trigger/{id}/status` | Poll status of a triggered run |
 | `GET` | `/pipeline/status` | Current stage counts + pipeline value |
@@ -426,7 +596,7 @@ Full Swagger docs at `http://localhost:8001/docs`. Key endpoints:
 
 ---
 
-## 10. Troubleshooting
+## 12. Troubleshooting
 
 ### Chat returns "could not reach the API server"
 API container is not running or crashed.

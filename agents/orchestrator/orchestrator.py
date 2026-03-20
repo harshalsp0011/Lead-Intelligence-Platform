@@ -30,9 +30,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from agents.analyst import enrichment_client
+from agents.notifications import email_notifier
 from agents.orchestrator import task_manager
 from config.settings import get_settings
-from database.orm_models import Company, EmailDraft, LeadScore
+from database.orm_models import Company, CompanyFeature, EmailDraft, HumanApprovalRequest, LeadScore
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +141,7 @@ def run_analyst(
 
     counts: dict[str, int] = {"high": 0, "medium": 0, "low": 0}
     high_ids: list[str] = []
+    scored_leads: list[dict[str, Any]] = []
 
     # Keep only the latest score per company to avoid double-counting.
     for company_id in company_ids:
@@ -158,7 +160,54 @@ def run_analyst(
         if tier == "high":
             high_ids.append(company_id)
 
+        # Build lead summary for notification
+        company = db_session.get(Company, parsed_company_id)
+        feature = db_session.execute(
+            select(CompanyFeature)
+            .where(CompanyFeature.company_id == parsed_company_id)
+            .order_by(CompanyFeature.computed_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+
+        scored_leads.append({
+            "name": company.name if company else "",
+            "industry": company.industry if company else "",
+            "city": company.city if company else "",
+            "state": company.state if company else "",
+            "score": float(latest_score.score or 0),
+            "tier": tier,
+            "savings_mid": float(feature.savings_mid or 0) if feature else 0,
+        })
+
     total = sum(counts.values())
+
+    # Create human approval request and send notification email
+    if total > 0:
+        settings = get_settings()
+        approval_req = HumanApprovalRequest(
+            id=uuid.uuid4(),
+            approval_type="leads",
+            status="pending",
+            items_count=total,
+            items_summary=f"High: {counts.get('high', 0)}, Medium: {counts.get('medium', 0)}, Low: {counts.get('low', 0)}",
+            notification_email=settings.ALERT_EMAIL,
+            notification_sent=False,
+            created_at=datetime.now(timezone.utc),
+        )
+        db_session.add(approval_req)
+        db_session.commit()
+
+        if settings.ALERT_EMAIL:
+            sent = email_notifier.send_lead_approval_request(
+                leads=scored_leads,
+                run_id=str(approval_req.id),
+                recipient_email=settings.ALERT_EMAIL,
+            )
+            if sent:
+                approval_req.notification_sent = True
+                approval_req.notification_sent_at = datetime.now(timezone.utc)
+                db_session.commit()
+
     return {
         "scored": total,
         "high": counts.get("high", 0),

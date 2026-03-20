@@ -22,6 +22,7 @@ Usage:
 
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -45,32 +46,62 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# LangSmith tracing — activate at module load so every agent call is traced
+# ---------------------------------------------------------------------------
+
+def _setup_tracing() -> None:
+    """Enable LangSmith tracing if LANGCHAIN_API_KEY is set in the environment.
+
+    LangChain reads LANGCHAIN_TRACING_V2 and LANGCHAIN_API_KEY automatically,
+    but we set them explicitly here so Docker env vars are always applied before
+    any LangChain import initialises its internal tracer.
+    """
+    settings = get_settings()
+    if settings.LANGCHAIN_API_KEY:
+        os.environ["LANGCHAIN_TRACING_V2"] = "true"
+        os.environ["LANGCHAIN_API_KEY"] = settings.LANGCHAIN_API_KEY
+        os.environ["LANGCHAIN_PROJECT"] = settings.LANGCHAIN_PROJECT
+        logger.info("LangSmith tracing enabled — project: %s", settings.LANGCHAIN_PROJECT)
+    else:
+        logger.info("LangSmith tracing disabled (LANGCHAIN_API_KEY not set)")
+
+_setup_tracing()
+
+
+# ---------------------------------------------------------------------------
 # System prompt — personality and rules given to the LLM
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are the Lead Intelligence Agent for Troy & Banks, a utility cost \
-consulting firm based in Buffalo, NY.
+SYSTEM_PROMPT = """You are Scout, the Lead Intelligence Agent for Troy & Banks, \
+a utility cost consulting firm based in Buffalo, NY.
 
-Your job is to help the Troy & Banks sales team find utility companies (healthcare, \
-hospitality, manufacturing, retail, public sector, office) as potential clients, \
-track outreach progress, and report on pipeline activity.
+Your job is to help the sales team find utility companies, track outreach, and report on pipeline activity.
 
-Rules you must follow:
-- Always use the available tools to answer questions. Never make up company names, \
-  scores, or contact information.
-- If the user greets you or asks a general question, introduce yourself briefly and \
-  suggest what you can help with.
-- Keep replies concise and professional. Lead with the result, not the explanation.
-- When you find companies or leads, summarize counts and highlight key details.
-- If a tool returns 0 results, say so clearly and suggest next steps.
-- Never call run_full_pipeline unless the user explicitly asks to run everything.
+== CRITICAL TOOL USAGE RULES ==
 
-You have these capabilities:
-1. Find new companies (search_companies) — triggers Scout to search multiple sources
-2. Show scored leads (get_leads) — queries the database for leads by tier/industry
-3. Show outreach history (get_outreach_history) — who we already emailed
-4. Show replies (get_replies) — prospects who replied and their sentiment
-5. Run the full pipeline (run_full_pipeline) — Scout + Analyst + Writer end to end
+DO NOT call any tool for these types of messages — reply conversationally only:
+- Greetings: "hi", "hello", "hey", "good morning"
+- Capability questions: "what can you do", "how can you help", "what are your features"
+- General questions: "tell me about yourself", "what is this", "how does this work"
+- Confirmations: "ok", "got it", "thanks", "sounds good"
+
+ONLY call a tool when the user gives an explicit data command:
+- "find companies" → call search_companies
+- "show leads", "show me leads", "get leads", "list leads" → call get_leads
+- "who did we email", "outreach history" → call get_outreach_history
+- "any replies", "who replied" → call get_replies
+- "run the full pipeline", "run everything" → call run_full_pipeline
+- "approve lead", "approve company", "approve these" → call approve_leads
+
+When in doubt — do NOT call a tool. Ask the user to clarify what they need.
+
+== RESPONSE RULES ==
+
+- For greetings: say "Hi, I'm Scout, Lead Intelligence Agent for Troy & Banks. \
+I can find companies, show scored leads, check outreach history, or run the full pipeline. What do you need?"
+- For capability questions: list the 5 capabilities in plain text. No tool calls.
+- Keep all replies short and direct.
+- Never make up company names, scores, or contact data.
 """
 
 
@@ -101,11 +132,11 @@ def _build_llm() -> Any:
 # Run record helpers
 # ---------------------------------------------------------------------------
 
-def _create_run(db: Session, trigger_input: dict[str, Any]) -> AgentRun:
+def _create_run(db: Session, trigger_input: dict[str, Any], run_id: uuid.UUID | None = None) -> AgentRun:
     """Insert a new agent_runs row and return it."""
     now = datetime.now(timezone.utc)
     run = AgentRun(
-        id=uuid.uuid4(),
+        id=run_id or uuid.uuid4(),
         trigger_source="chat",
         trigger_input=trigger_input,
         status="started",
@@ -176,8 +207,11 @@ def _make_tools(db: Session, results: dict[str, Any], run: AgentRun) -> list[Any
         run.status = "scout_running"
         db.commit()
 
+        _log_action(db, run.id, "scout", "progress", "info",
+                    output_summary=f"Scout starting — finding {count} {industry} companies in {location}")
+
         try:
-            company_ids = scout_agent.run(industry, location, count, db)
+            company_ids = scout_agent.run(industry, location, count, db, run_id=str(run.id))
             duration = int((time.time() - start) * 1000)
 
             run.companies_found = len(company_ids)
@@ -359,15 +393,87 @@ def _make_tools(db: Session, results: dict[str, Any], run: AgentRun) -> list[Any
             db.commit()
             return json.dumps({"error": str(exc)})
 
-    return [search_companies, get_leads, get_outreach_history, get_replies, run_full_pipeline]
+    @tool
+    def approve_leads(company_ids: list[str], approved_by: str = "sales_team") -> str:
+        """Approve specific leads by their company IDs so Writer can draft emails for them.
+        Use when the user says 'approve lead', 'approve company', 'approve these leads',
+        or provides a list of company IDs/names to approve.
+        Args:
+            company_ids: list of company UUID strings to approve
+            approved_by: name of the approver (default 'sales_team')
+        """
+        from datetime import datetime, timezone as tz
+        now = datetime.now(tz.utc)
+        approved_count = 0
+
+        for cid_str in company_ids:
+            try:
+                cid = uuid.UUID(cid_str)
+                score_row = db.execute(
+                    select(LeadScore)
+                    .where(LeadScore.company_id == cid)
+                    .order_by(LeadScore.scored_at.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+
+                if score_row:
+                    score_row.approved_human = True
+                    score_row.approved_by = approved_by
+                    score_row.approved_at = now
+
+                company = db.execute(
+                    select(Company).where(Company.id == cid)
+                ).scalar_one_or_none()
+                if company:
+                    company.status = "approved"
+                    company.updated_at = now
+
+                approved_count += 1
+            except Exception as exc:
+                logger.warning("Failed to approve company %s: %s", cid_str, exc)
+
+        db.commit()
+        _log_action(db, run.id, "chat", "approve_leads", "success",
+                    output_summary=f"Approved {approved_count} leads via chat")
+
+        return json.dumps({"approved": approved_count, "approved_by": approved_by})
+
+    return [search_companies, get_leads, get_outreach_history, get_replies, run_full_pipeline, approve_leads]
+
+
+# ---------------------------------------------------------------------------
+# Conversational message detector
+# ---------------------------------------------------------------------------
+
+_CONVERSATIONAL_PATTERNS = [
+    "hi", "hello", "hey", "good morning", "good afternoon", "good evening",
+    "what can you do", "what do you do", "how can you help", "what are you",
+    "tell me about yourself", "how does this work", "what is this",
+    "help", "thanks", "thank you", "ok", "okay", "got it", "sounds good",
+    "great", "nice", "cool", "awesome",
+]
+
+def _is_conversational(message: str) -> bool:
+    """Return True if the message is small talk or a capability question.
+    These bypass the agent loop entirely — no tools will be called.
+    """
+    msg = message.lower().strip().rstrip("?!.")
+    return any(msg == p or msg.startswith(p) for p in _CONVERSATIONAL_PATTERNS)
 
 
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def run_chat(message: str, db: Session) -> dict[str, Any]:
+def run_chat(message: str, db: Session, run_id: str | None = None) -> dict[str, Any]:
     """Process a natural-language message and return a reply with structured data.
+
+    Args:
+        message: User's natural-language input
+        db: SQLAlchemy session
+        run_id: Optional pre-generated UUID string — lets the caller reserve a run_id
+                before spawning this in a background thread so the frontend can start
+                polling progress logs immediately.
 
     Returns:
         {
@@ -384,20 +490,28 @@ def run_chat(message: str, db: Session) -> dict[str, Any]:
         "pipeline_summary": None,
     }
 
-    run = _create_run(db, {"message": message})
+    parsed_run_id = uuid.UUID(run_id) if run_id else None
+    run = _create_run(db, {"message": message}, run_id=parsed_run_id)
 
     try:
         llm = _build_llm()
-        tools = _make_tools(db, results, run)
 
-        # create_agent: langchain 1.x — passes system_prompt directly, no need for
-        # prompt templates. LLM reads system_prompt to understand its role and rules,
-        # then reads tool docstrings to decide which tool to call.
-        # Returns a compiled LangGraph StateGraph that runs the ReAct loop internally.
-        agent = create_agent(llm, tools, system_prompt=SYSTEM_PROMPT)
-
-        response = agent.invoke({"messages": [HumanMessage(content=message)]})
-        reply = response["messages"][-1].content
+        if _is_conversational(message):
+            # Bypass tools entirely — direct LLM reply.
+            # Prevents llama3.2 from calling tools on greetings/capability questions
+            # regardless of system prompt instructions.
+            from langchain_core.messages import SystemMessage
+            response = llm.invoke([
+                SystemMessage(content=SYSTEM_PROMPT),
+                HumanMessage(content=message),
+            ])
+            reply = response.content
+        else:
+            # Data request — run the full agent with tools
+            tools = _make_tools(db, results, run)
+            agent = create_agent(llm, tools, system_prompt=SYSTEM_PROMPT)
+            response = agent.invoke({"messages": [HumanMessage(content=message)]})
+            reply = response["messages"][-1].content
 
         _finish_run(db, run, "completed")
         logger.info("Chat run %s completed. message=%r", run.id, message[:80])

@@ -7,6 +7,7 @@ import ScoutLive from './pages/ScoutLive';
 import EmailReview from './pages/EmailReview';
 import Pipeline from './pages/Pipeline';
 import Reports from './pages/Reports';
+import Triggers from './pages/Triggers';
 
 // ---------------------------------------------------------------------------
 // Sidebar nav item
@@ -49,13 +50,14 @@ function Layout({ children }) {
           <NavItem to="/scout"    icon="🔍" label="Scout Live" />
           <NavItem to="/leads"    icon="📋" label="Leads" />
           <NavItem to="/emails"   icon="✉️"  label="Email Review" />
+          <NavItem to="/triggers" icon="▶️"  label="Triggers" />
           <NavItem to="/pipeline" icon="⚙️"  label="Pipeline" />
           <NavItem to="/reports"  icon="📊" label="Reports" />
         </nav>
 
         {/* Footer */}
         <div className="px-4 py-3 border-t border-slate-700">
-          <p className="text-slate-500 text-xs">Phase 1 — Local</p>
+          <p className="text-slate-500 text-xs">Phase 2 — Local</p>
         </div>
       </aside>
 
@@ -80,6 +82,7 @@ export default function App() {
           <Route path="/scout"    element={<ScoutLive />} />
           <Route path="/leads"    element={<Leads />} />
           <Route path="/emails"   element={<EmailReview />} />
+          <Route path="/triggers" element={<Triggers />} />
           <Route path="/pipeline" element={<Pipeline />} />
           <Route path="/reports"  element={<Reports />} />
         </Routes>

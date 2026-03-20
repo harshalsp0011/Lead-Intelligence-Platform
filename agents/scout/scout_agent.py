@@ -30,9 +30,30 @@ from agents.scout.scout_critic import (
     rank_sources,
     update_source_performance,
 )
-from database.orm_models import Company
+from database.orm_models import AgentRunLog, Company
 
 logger = logging.getLogger(__name__)
+
+
+def _log_progress(db: Session, run_id: str | None, message: str) -> None:
+    """Write a human-readable progress step to agent_run_logs for live UI display."""
+    if not run_id:
+        return
+    try:
+        entry = AgentRunLog(
+            id=uuid.uuid4(),
+            run_id=uuid.UUID(run_id),
+            agent="scout",
+            action="progress",
+            status="info",
+            output_summary=message,
+            logged_at=datetime.now(timezone.utc),
+        )
+        db.add(entry)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning("Failed to write progress log: %s", message)
 
 _KNOWN_INDUSTRIES = {
     "healthcare",
@@ -68,11 +89,15 @@ def run(
     used_sources: list[str] = []
     source_results: list[dict] = []  # tracks (source, found, passed, score) for writeback
 
+    _log_progress(db_session, run_id, f"Starting Scout — looking for {count} {industry} companies in {location}")
+
     # Rank API sources by past performance for this context
     ranked_api_sources = rank_sources(industry, location, _API_SOURCES, db_session)
 
     # --- Phase 1: configured directory sources ---
     dir_sources = directory_scraper.load_directory_sources(db_session)
+    if dir_sources:
+        _log_progress(db_session, run_id, f"Checking {len(dir_sources)} configured directory source(s)...")
     for source in dir_sources:
         if len(saved_ids) >= count:
             break
@@ -81,11 +106,13 @@ def run(
         if source_name.lower() in {s.lower() for s in used_sources}:
             continue
 
+        _log_progress(db_session, run_id, f"Scraping directory: {source_name}...")
         used_sources.append(source_name)
         try:
             batch = _scrape_and_save_directory(source, db_session, run_id)
         except Exception:
             logger.exception("Directory source failed: %s", source_name)
+            _log_progress(db_session, run_id, f"Directory {source_name} failed — skipping")
             source_results.append({"source": source_name, "found": 0, "passed": 0, "score": 0.0})
             continue
 
@@ -97,12 +124,14 @@ def run(
             remaining = count - len(saved_ids)
             new_ids = _save_api_companies(batch, db_session, run_id)
             saved_ids.extend(new_ids[:remaining])
+            _log_progress(db_session, run_id, f"Found {len(new_ids)} companies from {source_name} (total: {len(saved_ids)})")
 
         logger.info("Directory source %s: found=%d score=%.1f total_saved=%d",
                     source_name, len(batch), score, len(saved_ids))
 
     # --- Phase 2: Tavily dynamic search ---
     if len(saved_ids) < count:
+        _log_progress(db_session, run_id, f"Searching Tavily for {industry} directories in {location}...")
         tavily_sources = search_client.search_directory_sources(industry, location, db_session)
         for source in tavily_sources:
             if len(saved_ids) >= count:
@@ -111,11 +140,13 @@ def run(
             if source_name.lower() in {s.lower() for s in used_sources}:
                 continue
 
+            _log_progress(db_session, run_id, f"Scraping Tavily result: {source_name}...")
             used_sources.append(source_name)
             try:
                 batch = _scrape_and_save_directory(source, db_session, run_id)
             except Exception:
                 logger.exception("Tavily source failed: %s", source_name)
+                _log_progress(db_session, run_id, f"Tavily source {source_name} failed — skipping")
                 source_results.append({"source": "tavily", "found": 0, "passed": 0, "score": 0.0})
                 continue
 
@@ -126,6 +157,7 @@ def run(
                 remaining = count - len(saved_ids)
                 new_ids = _save_api_companies(batch, db_session, run_id)
                 saved_ids.extend(new_ids[:remaining])
+                _log_progress(db_session, run_id, f"Found {len(new_ids)} companies via Tavily/{source_name} (total: {len(saved_ids)})")
 
             logger.info("Tavily source %s: found=%d score=%.1f total_saved=%d",
                         source_name, len(batch), score, len(saved_ids))
@@ -137,6 +169,8 @@ def run(
         if api_source in {s.lower() for s in used_sources}:
             continue
 
+        source_label = "Google Maps" if api_source == "google_maps" else "Yelp"
+        _log_progress(db_session, run_id, f"Trying {source_label} for {industry} in {location}...")
         used_sources.append(api_source)
         remaining = count - len(saved_ids)
 
@@ -144,10 +178,12 @@ def run(
             batch = _fetch_from_api_source(api_source, industry, location, limit=max(remaining + 5, 20))
         except Exception:
             logger.exception("API source failed: %s", api_source)
+            _log_progress(db_session, run_id, f"{source_label} failed — skipping")
             source_results.append({"source": api_source, "found": 0, "passed": 0, "score": 0.0})
             continue
 
         if not batch:
+            _log_progress(db_session, run_id, f"{source_label} returned 0 results")
             source_results.append({"source": api_source, "found": 0, "passed": 0, "score": 0.0})
             continue
 
@@ -156,6 +192,7 @@ def run(
         source_results.append({"source": api_source, "found": len(batch), "passed": len(new_ids), "score": score})
         saved_ids.extend(new_ids[:remaining])
 
+        _log_progress(db_session, run_id, f"Found {len(new_ids)} companies from {source_label} (total: {len(saved_ids)})")
         sufficient = is_quality_sufficient(score)
         logger.info(
             "API source %s: found=%d saved=%d score=%.1f sufficient=%s total_saved=%d",
@@ -174,6 +211,7 @@ def run(
             db=db_session,
         )
 
+    _log_progress(db_session, run_id, f"Scout complete — saved {len(saved_ids)} of {count} requested companies")
     logger.info(
         "Scout complete: saved=%d target=%d industry=%s location=%s sources_tried=%s",
         len(saved_ids), count, industry, location, used_sources,

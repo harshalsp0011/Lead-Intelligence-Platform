@@ -127,6 +127,13 @@ class Settings:
     API_KEY: str = os.getenv("API_KEY", "")
 
     # ------------------------------------------------------------------ #
+    # OBSERVABILITY — LangSmith
+    # ------------------------------------------------------------------ #
+    LANGCHAIN_TRACING_V2: str = os.getenv("LANGCHAIN_TRACING_V2", "false")
+    LANGCHAIN_API_KEY: str = os.getenv("LANGCHAIN_API_KEY", "")
+    LANGCHAIN_PROJECT: str = os.getenv("LANGCHAIN_PROJECT", "utility-lead-platform")
+
+    # ------------------------------------------------------------------ #
     # ALERTS
     # ------------------------------------------------------------------ #
     ALERT_EMAIL: str = os.getenv("ALERT_EMAIL", "")
