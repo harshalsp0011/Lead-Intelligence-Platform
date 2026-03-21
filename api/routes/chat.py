@@ -93,11 +93,28 @@ def chat_result(run_id: str) -> dict[str, Any]:
     """Return the result of a chat run.
 
     Returns:
-    - {"status": "pending", "run_id": "..."} while still running
-    - {"status": "done",    "run_id": "...", "reply": "...", "data": {...}} when finished
-    - {"status": "error",   "run_id": "...", "reply": "error details"} on failure
+    - {"status": "pending",   "run_id": "..."} while still running
+    - {"status": "done",      "run_id": "...", "reply": "...", "data": {...}} when finished
+    - {"status": "error",     "run_id": "...", "reply": "error details"} on failure
+    - {"status": "cancelled", "run_id": "..."} if stopped by user
     """
     result = _results.get(run_id)
     if not result:
         raise HTTPException(status_code=404, detail="Run not found — may have expired")
     return result
+
+
+@router.post("/{run_id}/stop")
+def stop_chat(run_id: str) -> dict[str, Any]:
+    """Mark a chat run as cancelled.
+
+    The background thread may still be running, but the frontend will stop polling.
+    If the thread finishes after this, its result is discarded.
+    """
+    result = _results.get(run_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if result.get("status") == "pending":
+        _results[run_id] = {**result, "status": "cancelled"}
+        logger.info("Chat run %s cancelled by user", run_id)
+    return {"run_id": run_id, "status": _results[run_id]["status"]}

@@ -84,6 +84,7 @@ class Settings:
     HUNTER_API_KEY: str = os.getenv("HUNTER_API_KEY", "")
     APOLLO_API_KEY: str = os.getenv("APOLLO_API_KEY", "")
 
+
     # ------------------------------------------------------------------ #
     # DATABASE
     # ------------------------------------------------------------------ #

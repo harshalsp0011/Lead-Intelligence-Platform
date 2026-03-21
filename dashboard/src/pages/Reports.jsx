@@ -22,6 +22,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import LoadingOverlay from '../components/LoadingOverlay';
 import {
   BarChart,
   Bar,
@@ -501,7 +502,8 @@ export default function Reports() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
+    <div className="h-full overflow-y-auto bg-gray-50 p-6">
+      {isLoading && <LoadingOverlay message="Loading reports..." />}
       <div className="max-w-7xl mx-auto">
         <PageHeader
           startDate={startDate}

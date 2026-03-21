@@ -20,6 +20,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
+import LoadingOverlay from '../components/LoadingOverlay';
 import { useNavigate } from 'react-router-dom';
 import {
   fetchPipelineStatus,
@@ -107,14 +108,15 @@ function PageHeader({ onRefresh, isLoading, lastUpdated }) {
  * AgentHealthBar: Colored status dots for services
  */
 function AgentHealthBar({ health, isLoading }) {
+  // Keys must match what /pipeline/health returns: postgres, ollama, api, airflow, sendgrid, tavily, slack
   const services = [
-    'database',
-    'llm',
-    'api',
-    'airflow',
-    'email',
-    'search',
-    'slack',
+    { key: 'postgres',  label: 'Database' },
+    { key: 'ollama',    label: 'LLM' },
+    { key: 'api',       label: 'API' },
+    { key: 'airflow',   label: 'Airflow' },
+    { key: 'sendgrid',  label: 'Email' },
+    { key: 'tavily',    label: 'Search' },
+    { key: 'slack',     label: 'Slack' },
   ];
 
   const getStatusColor = (status) => {
@@ -127,16 +129,17 @@ function AgentHealthBar({ health, isLoading }) {
     <div className="bg-white rounded-lg shadow p-4 mb-6">
       <h2 className="text-sm font-semibold text-gray-700 mb-3">Agent Health</h2>
       <div className="flex gap-6">
-        {services.map((service) => {
-          const status = health?.[service] || 'unknown';
+        {services.map((svc) => {
+          const statusObj = health?.[svc.key];
+          const statusStr = typeof statusObj === 'object' ? (statusObj?.status || 'unknown') : (statusObj || 'unknown');
           return (
-            <div key={service} className="flex items-center gap-2">
+            <div key={svc.key} className="flex items-center gap-2">
               <div
-                className={`w-3 h-3 rounded-full ${getStatusColor(status)} ${
+                className={`w-3 h-3 rounded-full ${getStatusColor(statusStr)} ${
                   isLoading ? 'animate-pulse' : ''
                 }`}
               />
-              <span className="text-xs text-gray-600 capitalize">{service}</span>
+              <span className="text-xs text-gray-600">{svc.label}</span>
             </div>
           );
         })}
@@ -149,6 +152,8 @@ function AgentHealthBar({ health, isLoading }) {
  * PipelineStageCards: Cards showing lead counts by stage
  */
 function PipelineStageCards({ pipelineData, isLoading }) {
+  // API returns keys without _count suffix: { new: 59, scored: 0, ... }
+  // meeting_booked is the API key for the meeting stage
   const stages = [
     { key: 'new', label: 'New', color: 'bg-gray-100 text-gray-800' },
     { key: 'enriched', label: 'Enriched', color: 'bg-gray-100 text-gray-800' },
@@ -156,14 +161,14 @@ function PipelineStageCards({ pipelineData, isLoading }) {
     { key: 'approved', label: 'Approved', color: 'bg-purple-100 text-purple-800' },
     { key: 'contacted', label: 'Contacted', color: 'bg-yellow-100 text-yellow-800' },
     { key: 'replied', label: 'Replied', color: 'bg-blue-100 text-blue-800' },
-    { key: 'meeting', label: 'Meeting', color: 'bg-blue-100 text-blue-800' },
+    { key: 'meeting_booked', label: 'Meeting', color: 'bg-blue-100 text-blue-800' },
     { key: 'won', label: 'Won', color: 'bg-green-100 text-green-800' },
   ];
 
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-8 mb-6">
       {stages.map((stage) => {
-        const count = pipelineData?.[`${stage.key}_count`] || 0;
+        const count = pipelineData?.[stage.key] ?? 0;
         return (
           <div
             key={stage.key}
@@ -183,7 +188,7 @@ function PipelineStageCards({ pipelineData, isLoading }) {
  */
 function PipelineValueBanner({ pipelineData, isLoading }) {
   const pipelineValue = pipelineData?.pipeline_value_mid || 0;
-  const revenueEstimate = pipelineData?.revenue_estimate || 0;
+  const revenueEstimate = pipelineValue * 0.24;  // 24% contingency fee estimate
 
   return (
     <div
@@ -209,7 +214,7 @@ function PipelineValueBanner({ pipelineData, isLoading }) {
  * HotLeadsBanner: Alert for replied leads needing attention
  */
 function HotLeadsBanner({ pipelineData, navigate }) {
-  const hotLeadsCount = pipelineData?.replied_count || 0;
+  const hotLeadsCount = pipelineData?.replied || 0;
   const hasUnalerledLeads = hotLeadsCount > 0; // Assume all replied leads aren't alerted
 
   if (!hasUnalerledLeads) return null;
@@ -558,7 +563,8 @@ export default function Pipeline() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
+    <div className="h-full overflow-y-auto bg-gray-50 p-6">
+      {isLoading && <LoadingOverlay message="Loading pipeline data..." />}
       <div className="max-w-7xl mx-auto">
         {/* Page Header */}
         <PageHeader onRefresh={loadAllData} isLoading={isLoading} lastUpdated={lastUpdated} />

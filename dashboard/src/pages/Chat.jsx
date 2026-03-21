@@ -7,16 +7,16 @@
  *   2. Poll /pipeline/run/{run_id} every 2 s → show live progress steps
  *   3. Poll /chat/result/{run_id}  every 2 s → show final reply when done
  *
- * Examples:
- *   "find 10 healthcare companies in Buffalo NY"
- *   "show me all high-tier leads"
- *   "which companies have we already emailed?"
- *   "did anyone reply to our emails?"
- *   "run the full pipeline for manufacturing in Buffalo"
+ * Observability features:
+ *   - Stop button during any run (shows summary of steps completed)
+ *   - "View logs" expandable panel on every completed agent message
+ *   - Detailed step-by-step summary on stop / error / server-restart
+ *   - Chat history persists across page refresh (localStorage)
+ *   - Active run survives page navigation (sessionStorage run_id)
  */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { startChat, fetchChatResult, fetchRunStatus } from '../services/api';
+import { startChat, fetchChatResult, fetchRunStatus, stopChatRun } from '../services/api';
 
 // ---------------------------------------------------------------------------
 // Quick-prompt suggestions shown before first message
@@ -30,9 +30,18 @@ const SUGGESTIONS = [
 ];
 
 // ---------------------------------------------------------------------------
+// Build a human-readable step summary from an array of progress strings
+// ---------------------------------------------------------------------------
+function buildStepSummary(steps) {
+  if (!steps || steps.length === 0) return 'No steps were recorded yet.';
+  return steps
+    .map((s, i) => (i === steps.length - 1 ? `→ ${s}` : `✓ ${s}`))
+    .join('\n');
+}
+
+// ---------------------------------------------------------------------------
 // Inline result renderers
 // ---------------------------------------------------------------------------
-
 function CompanyCard({ company }) {
   return (
     <div className="bg-white border border-slate-200 rounded-lg p-3 text-xs">
@@ -202,6 +211,89 @@ function DataSection({ data }) {
 }
 
 // ---------------------------------------------------------------------------
+// Expandable raw log viewer — pulls from /pipeline/run/{runId} on first open
+// ---------------------------------------------------------------------------
+function LogsPanel({ runId }) {
+  const [open, setOpen] = useState(false);
+  const [runData, setRunData] = useState(null);
+  const [fetching, setFetching] = useState(false);
+
+  async function toggle() {
+    if (open) { setOpen(false); return; }
+    setOpen(true);
+    if (runData) return; // already loaded
+    setFetching(true);
+    try {
+      const data = await fetchRunStatus(runId);
+      setRunData(data);
+    } catch {
+      setRunData({ _error: true });
+    } finally {
+      setFetching(false);
+    }
+  }
+
+  const statusColor = {
+    info: 'text-blue-600',
+    success: 'text-green-600',
+    error: 'text-red-500',
+    warning: 'text-yellow-600',
+  };
+
+  return (
+    <div className="mt-1.5">
+      <button
+        onClick={toggle}
+        className="text-xs text-slate-400 hover:text-slate-600 underline decoration-dotted"
+      >
+        {open ? 'Hide logs' : 'View run logs'}
+      </button>
+
+      {open && (
+        <div className="mt-2 bg-slate-900 border border-slate-700 rounded-lg p-3 text-xs max-h-72 overflow-y-auto">
+          {fetching && <p className="text-slate-400 font-mono">Loading…</p>}
+          {runData?._error && (
+            <p className="text-red-400 font-mono">Could not load logs — run may have expired after server restart.</p>
+          )}
+          {runData && !runData._error && (
+            <>
+              {/* Run meta */}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-3 pb-2 border-b border-slate-700 text-slate-400 font-mono">
+                <span>status: <span className="text-slate-200">{runData.status}</span></span>
+                <span>companies: <span className="text-slate-200">{runData.companies_found}</span></span>
+                <span>scored: <span className="text-slate-200">{runData.companies_scored}</span></span>
+                <span>drafts: <span className="text-slate-200">{runData.drafts_created}</span></span>
+                <span className="text-slate-500">run: {runId.slice(0, 8)}…</span>
+              </div>
+              {runData.error_message && (
+                <p className="text-red-400 font-mono mb-2">! {runData.error_message}</p>
+              )}
+              {/* Step-by-step log */}
+              <div className="space-y-1 font-mono">
+                {(runData.recent_logs || []).map((lg, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <span className="text-slate-600 flex-shrink-0 select-none">
+                      {String(i + 1).padStart(2, '0')}
+                    </span>
+                    <span className={`flex-shrink-0 ${statusColor[lg.status] || 'text-slate-500'}`}>
+                      [{lg.agent}]
+                    </span>
+                    <span className="text-slate-300 break-words">{lg.output_summary || lg.action}</span>
+                  </div>
+                ))}
+                {(runData.recent_logs || []).length === 0 && (
+                  <p className="text-slate-500">No log entries recorded for this run.</p>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Message bubble
 // ---------------------------------------------------------------------------
 function Message({ msg }) {
@@ -217,14 +309,33 @@ function Message({ msg }) {
         <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
           isUser
             ? 'bg-blue-600 text-white rounded-tr-sm'
-            : 'bg-white border border-slate-200 text-slate-800 rounded-tl-sm shadow-sm'
+            : `bg-white border text-slate-800 rounded-tl-sm shadow-sm ${
+                msg.stopped
+                  ? 'border-orange-200'
+                  : msg.serverError
+                  ? 'border-red-200'
+                  : 'border-slate-200'
+              }`
         }`}>
-          {msg.content}
+          {/* Stopped / error banner */}
+          {msg.stopped && (
+            <p className="text-xs font-semibold text-orange-600 mb-1.5">
+              Run stopped by you
+            </p>
+          )}
+          {msg.serverError && (
+            <p className="text-xs font-semibold text-red-600 mb-1.5">
+              Run interrupted (server restart)
+            </p>
+          )}
+          {/* Message body — whitespace-pre-wrap to respect \n in summaries */}
+          <span className="whitespace-pre-wrap">{msg.content}</span>
         </div>
+
         {msg.data && <DataSection data={msg.data} />}
-        {msg.runId && (
-          <p className="text-xs text-slate-400 mt-1">Run ID: {msg.runId.slice(0, 8)}…</p>
-        )}
+
+        {/* Logs panel — only for completed agent messages with a runId */}
+        {!isUser && msg.runId && <LogsPanel runId={msg.runId} />}
       </div>
       {isUser && (
         <div className="w-7 h-7 rounded-full bg-slate-300 flex items-center justify-center text-slate-600 text-xs font-bold ml-2 flex-shrink-0 mt-0.5">
@@ -236,22 +347,31 @@ function Message({ msg }) {
 }
 
 // ---------------------------------------------------------------------------
-// Live progress indicator — shows step-by-step agent activity
+// Live progress indicator — shows step-by-step agent activity + Stop button
 // ---------------------------------------------------------------------------
-function ProgressIndicator({ steps }) {
+function ProgressIndicator({ steps, onStop }) {
   return (
     <div className="flex items-start mb-4">
       <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold mr-2 flex-shrink-0">
         A
       </div>
-      <div className="bg-white border border-slate-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm max-w-sm">
-        {/* Bounce dots */}
-        <div className="flex gap-1.5 items-center mb-2">
-          <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-          <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-          <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-          <span className="text-xs text-slate-400 ml-1">Agent is working…</span>
+      <div className="bg-white border border-slate-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm" style={{ maxWidth: '420px' }}>
+        {/* Status row with Stop button */}
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <div className="flex gap-1.5 items-center">
+            <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+            <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+            <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+            <span className="text-xs text-slate-400 ml-1">Agent working…</span>
+          </div>
+          <button
+            onClick={onStop}
+            className="text-xs text-red-500 hover:text-red-700 border border-red-200 hover:border-red-400 bg-red-50 hover:bg-red-100 px-2.5 py-1 rounded-lg transition-colors flex-shrink-0 font-medium"
+          >
+            Stop
+          </button>
         </div>
+
         {/* Progress steps */}
         {steps.length > 0 && (
           <div className="space-y-1 border-t border-slate-100 pt-2">
@@ -270,6 +390,12 @@ function ProgressIndicator({ steps }) {
               );
             })}
           </div>
+        )}
+
+        {steps.length === 0 && (
+          <p className="text-xs text-slate-400 border-t border-slate-100 pt-2">
+            Waiting for agent to start…
+          </p>
         )}
       </div>
     </div>
@@ -296,15 +422,23 @@ export default function Chat() {
     }
   });
   const [input, setInput] = useState('');
-  // If there's a run_id saved in sessionStorage, we were mid-run when user left
   const [loading, setLoading] = useState(
     () => !!sessionStorage.getItem('chat_active_run_id')
   );
   const [progressSteps, setProgressSteps] = useState([]);
+
+  // Refs so callbacks always see latest values without stale closures
   const pollingRef = useRef(null);
+  const progressStepsRef = useRef([]);
+  const activeRunIdRef = useRef(sessionStorage.getItem('chat_active_run_id') || null);
   const bottomRef = useRef(null);
 
-  // Persist all messages (both sides) to localStorage whenever they change
+  // Sync progress steps into ref whenever state updates
+  useEffect(() => {
+    progressStepsRef.current = progressSteps;
+  }, [progressSteps]);
+
+  // Persist messages to localStorage
   useEffect(() => {
     try {
       localStorage.setItem('chat_messages', JSON.stringify(messages));
@@ -317,8 +451,7 @@ export default function Chat() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading, progressSteps]);
 
-  // Stop polling on unmount — but the run_id stays in sessionStorage
-  // so when the user comes back, polling resumes automatically
+  // Stop polling on unmount — run_id stays in sessionStorage so we resume on remount
   useEffect(() => {
     return () => {
       if (pollingRef.current) clearTimeout(pollingRef.current);
@@ -331,9 +464,10 @@ export default function Chat() {
       pollingRef.current = null;
     }
     sessionStorage.removeItem('chat_active_run_id');
+    activeRunIdRef.current = null;
   }, []);
 
-  const finishRun = useCallback((reply, data, runId) => {
+  const finishRun = useCallback((reply, data, runId, extras = {}) => {
     stopPolling();
     setMessages((prev) => [
       ...prev,
@@ -343,10 +477,42 @@ export default function Chat() {
         content: reply || 'Done.',
         data: data || null,
         runId,
+        ...extras,
       },
     ]);
     setProgressSteps([]);
     setLoading(false);
+  }, [stopPolling]);
+
+  // User clicked Stop
+  const handleStop = useCallback(async () => {
+    const runId = activeRunIdRef.current;
+    const steps = progressStepsRef.current;
+
+    // Immediately end the UI loading state
+    stopPolling();
+    setLoading(false);
+    setProgressSteps([]);
+
+    const stepSummary = buildStepSummary(steps);
+    const reply = `Stopped.\n\nSteps completed before stopping:\n${stepSummary}\n\nRun ID: ${runId ? runId.slice(0, 8) + '…' : 'unknown'}\nAny companies already found/scored are saved — check the Leads page.`;
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: Date.now(),
+        role: 'agent',
+        content: reply,
+        data: null,
+        runId,
+        stopped: true,
+      },
+    ]);
+
+    // Notify backend (best-effort — UI already stopped)
+    if (runId) {
+      try { await stopChatRun(runId); } catch { /* ignore */ }
+    }
   }, [stopPolling]);
 
   const pollRun = useCallback(async (runId) => {
@@ -362,39 +528,49 @@ export default function Chat() {
           .map((lg) => lg.output_summary)
           .filter(Boolean);
         setProgressSteps(steps);
+        progressStepsRef.current = steps;
       }
 
       if (chatResult.status === 'fulfilled') {
         const result = chatResult.value;
+
         if (result.status === 'done' || result.status === 'error') {
           finishRun(result.reply, result.data, result.run_id);
           return;
         }
+
+        if (result.status === 'cancelled') {
+          // Already handled by handleStop — just stop polling silently
+          stopPolling();
+          setLoading(false);
+          return;
+        }
+
         // Still pending — keep polling
         pollingRef.current = setTimeout(() => pollRun(runId), 2000);
       } else {
         // fetchChatResult rejected — most likely 404 (server restarted)
         const msg = chatResult.reason?.message || '';
         if (msg.includes('404') || msg.includes('not found') || msg.includes('expired')) {
-          finishRun(
-            'The agent was still running when the server restarted. Please try your request again.',
-            null,
-            runId,
-          );
+          const steps = progressStepsRef.current;
+          const stepSummary = buildStepSummary(steps);
+          const reply = `Server restarted while the agent was running.\n\nSteps completed before restart:\n${stepSummary}\n\nRun ID: ${runId.slice(0, 8)}…\nAny data saved before the restart is visible on the Leads page.`;
+          finishRun(reply, null, runId, { serverError: true });
         } else {
-          // Network hiccup — retry
+          // Transient network hiccup — retry
           pollingRef.current = setTimeout(() => pollRun(runId), 3000);
         }
       }
     } catch {
       pollingRef.current = setTimeout(() => pollRun(runId), 3000);
     }
-  }, [finishRun]);
+  }, [finishRun, stopPolling]);
 
-  // On mount: if there was an active run when user navigated away, resume polling
+  // On mount: resume polling if there was an active run when user navigated away
   useEffect(() => {
     const savedRunId = sessionStorage.getItem('chat_active_run_id');
     if (savedRunId) {
+      activeRunIdRef.current = savedRunId;
       pollingRef.current = setTimeout(() => pollRun(savedRunId), 500);
     }
   }, [pollRun]);
@@ -405,15 +581,16 @@ export default function Chat() {
 
     setInput('');
     setProgressSteps([]);
+    progressStepsRef.current = [];
     setMessages((prev) => [...prev, { id: Date.now(), role: 'user', content: message }]);
     setLoading(true);
 
     try {
       const { run_id } = await startChat(message);
-      // Persist run_id so polling can resume if user navigates away and back
       sessionStorage.setItem('chat_active_run_id', run_id);
+      activeRunIdRef.current = run_id;
       pollingRef.current = setTimeout(() => pollRun(run_id), 1000);
-    } catch (err) {
+    } catch {
       setMessages((prev) => [
         ...prev,
         {
@@ -464,7 +641,12 @@ export default function Chat() {
           <Message key={msg.id} msg={msg} />
         ))}
 
-        {loading && <ProgressIndicator steps={progressSteps} />}
+        {loading && (
+          <ProgressIndicator
+            steps={progressSteps}
+            onStop={handleStop}
+          />
+        )}
 
         {/* Quick suggestions */}
         {showSuggestions && !loading && (

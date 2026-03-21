@@ -25,6 +25,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import LoadingOverlay from '../components/LoadingOverlay';
 import {
   fetchLeadById,
   approveLead,
@@ -844,7 +845,7 @@ export default function LeadDetail() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 p-6">
+      <div className="h-full overflow-y-auto bg-gray-50 p-6">
         <div className="max-w-4xl mx-auto text-center py-12">
           <p className="text-gray-500">Loading lead details...</p>
         </div>
@@ -854,7 +855,7 @@ export default function LeadDetail() {
 
   if (error || !lead) {
     return (
-      <div className="min-h-screen bg-gray-50 p-6">
+      <div className="h-full overflow-y-auto bg-gray-50 p-6">
         <div className="max-w-4xl mx-auto py-12">
           <BackButton navigate={navigate} />
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg">
@@ -866,7 +867,8 @@ export default function LeadDetail() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
+    <div className="h-full overflow-y-auto bg-gray-50 p-6">
+      {isLoading && <LoadingOverlay message="Loading lead details..." />}
       <div className="max-w-4xl mx-auto">
         <BackButton navigate={navigate} />
 

@@ -23,6 +23,7 @@ Usage:
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -80,7 +81,7 @@ Your job is to help the sales team find utility companies, track outreach, and r
 == CRITICAL TOOL USAGE RULES ==
 
 DO NOT call any tool for these types of messages — reply conversationally only:
-- Greetings: "hi", "hello", "hey", "good morning"
+- Greetings: "hi", "hello", "hey", "good morning", "how are you"
 - Capability questions: "what can you do", "how can you help", "what are your features"
 - General questions: "tell me about yourself", "what is this", "how does this work"
 - Confirmations: "ok", "got it", "thanks", "sounds good"
@@ -94,6 +95,27 @@ ONLY call a tool when the user gives an explicit data command:
 - "approve lead", "approve company", "approve these" → call approve_leads
 
 When in doubt — do NOT call a tool. Ask the user to clarify what they need.
+
+== get_leads ARGUMENT RULES — READ CAREFULLY ==
+
+The get_leads tool has two optional filters: tier and industry.
+
+TIER RULES — only set tier if the user explicitly uses these words:
+- "high tier", "top leads", "best leads", "high scoring" → tier="high"
+- "medium tier", "medium leads" → tier="medium"
+- "low tier", "low leads" → tier="low"
+- "show me leads", "all leads", "healthcare leads", "show me X leads" → tier="" (EMPTY — do NOT guess high)
+
+INDUSTRY RULES:
+- "show me healthcare leads" → industry="healthcare", tier=""
+- "show me high-tier healthcare leads" → industry="healthcare", tier="high"
+- "show me all leads" → industry="", tier=""
+
+EXAMPLES (follow exactly):
+- "show me leads" → get_leads(tier="", industry="")
+- "show me healthcare leads" → get_leads(tier="", industry="healthcare")
+- "show high tier leads" → get_leads(tier="high", industry="")
+- "show high tier healthcare leads" → get_leads(tier="high", industry="healthcare")
 
 == RESPONSE RULES ==
 
@@ -255,16 +277,18 @@ def _make_tools(db: Session, results: dict[str, Any], run: AgentRun) -> list[Any
         """Get scored leads from the database.
         Use when the user asks for leads, scored companies, high-tier leads, or pipeline results.
         Args:
-            tier: filter by 'high', 'medium', or 'low' — leave blank for all
-            industry: filter by industry name — leave blank for all
+            tier: ONLY set if user explicitly says 'high', 'medium', or 'low' tier.
+                  Leave BLANK ("") for general requests like "show me leads" or "show me healthcare leads".
+            industry: filter by industry name (e.g. 'healthcare', 'manufacturing') — leave blank for all
         """
+        from sqlalchemy import func as _func
         query = select(Company, LeadScore).join(
             LeadScore, LeadScore.company_id == Company.id, isouter=True
         )
         if industry:
-            query = query.where(Company.industry == industry.lower())
+            query = query.where(_func.lower(Company.industry) == industry.strip().lower())
         if tier:
-            query = query.where(LeadScore.tier == tier.lower())
+            query = query.where(LeadScore.tier == tier.strip().lower())
 
         rows = db.execute(query).all()
 
@@ -447,18 +471,69 @@ def _make_tools(db: Session, results: dict[str, Any], run: AgentRun) -> list[Any
 
 _CONVERSATIONAL_PATTERNS = [
     "hi", "hello", "hey", "good morning", "good afternoon", "good evening",
-    "what can you do", "what do you do", "how can you help", "what are you",
-    "tell me about yourself", "how does this work", "what is this",
+    "how are you", "what can you do", "what do you do", "how can you help",
+    "what are you", "tell me about yourself", "how does this work", "what is this",
     "help", "thanks", "thank you", "ok", "okay", "got it", "sounds good",
     "great", "nice", "cool", "awesome",
 ]
 
 def _is_conversational(message: str) -> bool:
-    """Return True if the message is small talk or a capability question.
-    These bypass the agent loop entirely — no tools will be called.
-    """
+    """Return True if the message is small talk or a capability question."""
     msg = message.lower().strip().rstrip("?!.")
     return any(msg == p or msg.startswith(p) for p in _CONVERSATIONAL_PATTERNS)
+
+
+# ---------------------------------------------------------------------------
+# Intent pre-parser — extracts structured args for simple lead/outreach queries
+# so llama3.2 never has to guess filter values for common requests.
+# ---------------------------------------------------------------------------
+
+_KNOWN_INDUSTRIES = [
+    "healthcare", "hospitality", "manufacturing", "retail", "education",
+    "logistics", "construction", "food", "government", "public sector",
+    "real estate", "finance", "technology", "telecom",
+]
+
+_TIER_KEYWORDS = {
+    "high": ["high tier", "high-tier", "top leads", "top scoring", "best leads", "high scoring"],
+    "medium": ["medium tier", "medium-tier", "medium leads"],
+    "low": ["low tier", "low-tier", "low leads", "low scoring"],
+}
+
+
+def _extract_lead_intent(message: str) -> dict | None:
+    """If the message is clearly a leads query, return {tier, industry} extracted from text.
+    Returns None if this is not a simple leads query (let the agent loop handle it).
+    """
+    msg = message.lower()
+    is_leads_query = bool(re.search(r'\b(show|get|list|give|fetch|find|what are|display)\b.*\blead', msg)
+                          or re.search(r'\blead(s)?\b', msg))
+    if not is_leads_query:
+        return None
+
+    tier = ""
+    for t, keywords in _TIER_KEYWORDS.items():
+        if any(kw in msg for kw in keywords):
+            tier = t
+            break
+
+    industry = ""
+    for ind in _KNOWN_INDUSTRIES:
+        if ind in msg:
+            industry = ind
+            break
+
+    return {"tier": tier, "industry": industry}
+
+
+def _extract_outreach_intent(message: str) -> str | None:
+    """Return 'history' or 'replies' if message matches, else None."""
+    msg = message.lower()
+    if any(kw in msg for kw in ["who did we email", "outreach", "already emailed", "contacted"]):
+        return "history"
+    if any(kw in msg for kw in ["repl", "responded", "interested", "wrote back"]):
+        return "replies"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -495,20 +570,73 @@ def run_chat(message: str, db: Session, run_id: str | None = None) -> dict[str, 
 
     try:
         llm = _build_llm()
+        tools = _make_tools(db, results, run)
 
         if _is_conversational(message):
-            # Bypass tools entirely — direct LLM reply.
-            # Prevents llama3.2 from calling tools on greetings/capability questions
-            # regardless of system prompt instructions.
+            # Tier 1: small talk / capability question — direct LLM reply, no tools
             from langchain_core.messages import SystemMessage
             response = llm.invoke([
                 SystemMessage(content=SYSTEM_PROMPT),
                 HumanMessage(content=message),
             ])
             reply = response.content
+
+        elif (lead_intent := _extract_lead_intent(message)) is not None:
+            # Tier 2: simple leads query — extract filters in Python, call tool directly
+            # so llama3.2 never guesses wrong tier/industry values
+            tier = lead_intent["tier"]
+            industry = lead_intent["industry"]
+            _log_action(db, run.id, "chat", "intent_parse", "info",
+                        output_summary=f"Leads query detected — tier={tier or 'all'}, industry={industry or 'all'}")
+            tool_result = tools[1].invoke({"tier": tier, "industry": industry})  # tools[1] = get_leads
+            # Ask LLM to summarise the result in plain English
+            from langchain_core.messages import SystemMessage
+            filter_desc = []
+            if industry:
+                filter_desc.append(f"industry={industry}")
+            if tier:
+                filter_desc.append(f"tier={tier}")
+            filters_used = ', '.join(filter_desc) or 'none'
+            parsed = json.loads(tool_result)
+            count = parsed.get("count", 0)
+            summarise_prompt = (
+                f"The user asked: \"{message}\"\n"
+                f"Filters applied: {filters_used}\n"
+                f"Leads found: {count}\n\n"
+                f"Write a short 1-2 sentence reply confirming what was found. "
+                f"Do NOT greet the user. Do NOT repeat the filters verbatim. "
+                f"If count is 0, suggest the user try without a tier filter or check the Leads page."
+            )
+            response = llm.invoke([
+                SystemMessage(content=SYSTEM_PROMPT),
+                HumanMessage(content=summarise_prompt),
+            ])
+            reply = response.content
+
+        elif (outreach_intent := _extract_outreach_intent(message)) is not None:
+            # Tier 2: outreach history or replies — call tool directly
+            from langchain_core.messages import SystemMessage
+            if outreach_intent == "history":
+                tool_result = tools[2].invoke({})  # get_outreach_history
+                label = "outreach records"
+            else:
+                tool_result = tools[3].invoke({})  # get_replies
+                label = "replies"
+            parsed = json.loads(tool_result)
+            count = parsed.get("count", 0)
+            summarise_prompt = (
+                f"The user asked: \"{message}\"\n"
+                f"{label.title()} found: {count}\n\n"
+                f"Write a short 1-2 sentence reply confirming what was found. Do NOT greet the user."
+            )
+            response = llm.invoke([
+                SystemMessage(content=SYSTEM_PROMPT),
+                HumanMessage(content=summarise_prompt),
+            ])
+            reply = response.content
+
         else:
-            # Data request — run the full agent with tools
-            tools = _make_tools(db, results, run)
+            # Tier 3: complex or multi-step request — full agent loop with tools
             agent = create_agent(llm, tools, system_prompt=SYSTEM_PROMPT)
             response = agent.invoke({"messages": [HumanMessage(content=message)]})
             reply = response["messages"][-1].content

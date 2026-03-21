@@ -180,9 +180,14 @@ def trigger_analyst(
     trigger_id, started_at = _register(
         "analyst_only", {"company_ids_count": len(company_ids)}
     )
+    _REGISTRY[trigger_id]["progress"] = []
+    _REGISTRY[trigger_id]["total"] = len(company_ids)
+
+    def _on_progress(entry: dict[str, Any]) -> None:
+        _REGISTRY[trigger_id]["progress"].append(entry)
 
     def _run(session: Session) -> dict[str, Any]:
-        return orchestrator.run_analyst(company_ids, session)
+        return orchestrator.run_analyst(company_ids, session, on_progress=_on_progress)
 
     background_tasks.add_task(_wrap, trigger_id, _run)
 
@@ -243,4 +248,5 @@ def trigger_status(trigger_id: UUID) -> TriggerStatusResponse:
         duration_seconds=duration,
         result_summary=entry.get("result_summary"),
         error_message=entry.get("error_message"),
+        progress=entry.get("progress") or [],
     )

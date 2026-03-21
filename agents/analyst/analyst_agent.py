@@ -14,7 +14,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from agents.analyst import savings_calculator, score_engine, spend_calculator
+from agents.analyst import enrichment_client, savings_calculator, score_engine, spend_calculator
 from agents.scout import website_crawler
 from database.orm_models import AgentRun, AgentRunLog, Company, CompanyFeature, Contact, LeadScore
 
@@ -76,6 +76,7 @@ def run(
     company_ids: list[str],
     db_session: Session,
     run_id: uuid.UUID | None = None,
+    on_progress: Any | None = None,
 ) -> list[str]:
     """Process a list of company IDs and return those scored successfully."""
     import time
@@ -88,14 +89,42 @@ def run(
             agent_run.status = "analyst_running"
             db_session.commit()
 
+    total = len(company_ids)
     processed_ids: list[str] = []
 
-    for company_id in company_ids:
+    logger.info("[analyst] Starting — %d companies to score", total)
+
+    for idx, company_id in enumerate(company_ids, 1):
         start = time.time()
         try:
-            process_one_company(company_id, db_session)
+            result = process_one_company(company_id, db_session)
             processed_ids.append(company_id)
-            duration = int((time.time() - start) * 1000)
+            duration_ms = int((time.time() - start) * 1000)
+
+            logger.info(
+                "[analyst] ✓ %d/%d  %s  score=%.1f tier=%s  emp=%s  (%.1fs)",
+                idx, total,
+                result.get("company_id", company_id)[:8],
+                result.get("score", 0),
+                result.get("tier", "?"),
+                result.get("employee_count", "?"),
+                duration_ms / 1000,
+            )
+
+            if on_progress:
+                company_obj = db_session.get(Company, _parse_uuid(company_id))
+                on_progress({
+                    "idx": idx,
+                    "total": total,
+                    "company_id": company_id,
+                    "name": company_obj.name if company_obj else company_id[:8],
+                    "score": round(result.get("score", 0), 1),
+                    "tier": result.get("tier", "low"),
+                    "employee_count": result.get("employee_count", 0),
+                    "site_count": result.get("site_count", 1),
+                    "duration_s": round(duration_ms / 1000, 1),
+                    "status": "ok",
+                })
 
             if run_id is not None:
                 agent_run = db_session.get(AgentRun, run_id)
@@ -105,11 +134,20 @@ def run(
                 _log_action(
                     db_session, run_id, "score_company", "success",
                     output_summary=f"Scored company {company_id}",
-                    duration_ms=duration,
+                    duration_ms=duration_ms,
                 )
         except Exception as exc:
             db_session.rollback()
-            logger.warning("Failed to score company %s: %s", company_id, exc)
+            logger.warning("[analyst] ✗ %d/%d  %s  FAILED: %s", idx, total, company_id[:8], exc)
+            if on_progress:
+                on_progress({
+                    "idx": idx,
+                    "total": total,
+                    "company_id": company_id,
+                    "name": company_id[:8],
+                    "status": "failed",
+                    "error": str(exc),
+                })
             if run_id is not None:
                 _log_action(
                     db_session, run_id, "score_company", "failure",
@@ -217,11 +255,18 @@ def process_one_company(company_id: str, db_session: Session) -> dict[str, Any]:
         "score": score,
         "tier": tier,
         "savings_mid": savings_mid,
+        "employee_count": enriched.get("employee_count") or 0,
+        "site_count": enriched.get("site_count") or 1,
     }
 
 
 def gather_company_data(company: dict[str, Any], db_session: Session) -> dict[str, Any]:
-    """Return company dict enriched with site/page/state scoring signals."""
+    """Return company dict enriched with site/page/state scoring signals.
+
+    Enrichment order:
+    1. Website crawl — if website present and site_count OR employee_count missing
+    2. Clearbit API  — if employee_count still missing after crawl (uses domain)
+    """
     enriched = dict(company)
 
     website = str(enriched.get("website") or "").strip()
@@ -235,11 +280,24 @@ def gather_company_data(company: dict[str, Any], db_session: Session) -> dict[st
         "employee_signal": current_employee_count,
     }
 
-    if website and current_site_count <= 0:
+    # Crawl if EITHER count is missing — not just site_count
+    needs_crawl = website and (current_site_count <= 0 or current_employee_count <= 0)
+    if needs_crawl:
         crawl_result = website_crawler.crawl_company_site(website)
-        enriched["site_count"] = int(crawl_result.get("location_count") or 1)
+        if current_site_count <= 0:
+            enriched["site_count"] = int(crawl_result.get("location_count") or 1)
         if current_employee_count <= 0:
             enriched["employee_count"] = int(crawl_result.get("employee_signal") or 0)
+
+    # Clearbit fallback — fill employee_count (and state/city if missing) via API
+    if not int(enriched.get("employee_count") or 0) and website:
+        cb = enrichment_client.enrich_company_data(website)
+        if cb.get("employee_count"):
+            enriched["employee_count"] = cb["employee_count"]
+        if not enriched.get("state") and cb.get("state"):
+            enriched["state"] = cb["state"]
+        if not enriched.get("city") and cb.get("city"):
+            enriched["city"] = cb["city"]
 
     enriched["has_website"] = bool(website)
     enriched["has_locations_page"] = bool(crawl_result.get("has_locations_page"))

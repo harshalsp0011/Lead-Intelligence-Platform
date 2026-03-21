@@ -102,3 +102,4 @@ class TriggerStatusResponse(BaseModel):
     duration_seconds: Optional[int] = None
     result_summary: Optional[Dict[str, Any]] = None
     error_message: Optional[str] = None
+    progress: list[Dict[str, Any]] = Field(default_factory=list)

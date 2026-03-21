@@ -52,43 +52,11 @@ STATUS_APPROVED = "approved"
 STATUS_ARCHIVED = "archived"
 
 
-def _latest_feature(db: Session, company_id: UUID) -> CompanyFeature | None:
-    """Return the latest computed feature row for one company."""
-    return db.execute(
-        select(CompanyFeature)
-        .where(CompanyFeature.company_id == company_id)
-        .order_by(CompanyFeature.computed_at.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-
-
-def _latest_score(db: Session, company_id: UUID) -> LeadScore | None:
-    """Return the latest score row for one company."""
-    return db.execute(
-        select(LeadScore)
-        .where(LeadScore.company_id == company_id)
-        .order_by(LeadScore.scored_at.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-
-
-def _contact_found(db: Session, company_id: UUID) -> bool:
-    """Return True when the company has at least one non-unsubscribed contact."""
-    return db.execute(
-        select(Contact.id)
-        .where(
-            Contact.company_id == company_id,
-            func.coalesce(Contact.unsubscribed, False).is_(False),
-        )
-        .limit(1)
-    ).first() is not None
-
-
 def _row_from_models(
-    db: Session,
     company: Company,
     feature: CompanyFeature | None,
     score: LeadScore | None,
+    contact_found: bool = False,
 ) -> dict[str, Any]:
     """Assemble a lead response payload from ORM model instances."""
     return {
@@ -109,7 +77,7 @@ def _row_from_models(
         "approved_by": getattr(score, "approved_by", None),
         "approved_at": getattr(score, "approved_at", None),
         "status": company.status or STATUS_NEW,
-        "contact_found": _contact_found(db, company.id),
+        "contact_found": contact_found,
         "date_scored": getattr(score, "scored_at", None) or datetime.now(timezone.utc),
         "updated_at": company.updated_at or datetime.now(timezone.utc),
     }
@@ -159,15 +127,44 @@ def _build_lead_row(row: dict[str, Any], contingency_fee: float) -> LeadResponse
     )
 
 
+def _aware(dt: Any) -> datetime:
+    """Return an offset-aware datetime — makes naive DB timestamps comparable."""
+    if not dt:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    if isinstance(dt, datetime) and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _latest_score(db: Session, company_id: UUID) -> LeadScore | None:
+    """Return the most-recently scored LeadScore row for a company, or None."""
+    return db.execute(
+        select(LeadScore)
+        .where(LeadScore.company_id == company_id)
+        .order_by(LeadScore.scored_at.desc().nulls_last())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _latest_feature(db: Session, company_id: UUID) -> CompanyFeature | None:
+    """Return the most-recently computed CompanyFeature row, or None."""
+    return db.execute(
+        select(CompanyFeature)
+        .where(CompanyFeature.company_id == company_id)
+        .order_by(CompanyFeature.computed_at.desc().nulls_last())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
 def _query_leads(
     db: Session,
     filters: LeadFilterParams,
     forced_tier: str | None = None,
     order_by: str = "c.updated_at DESC",
 ) -> tuple[int, int, int, int, list[dict[str, Any]]]:
-    """Run the leads query and return (total, high, medium, low, rows)."""
+    """Run the leads query using bulk DB calls and return (total, high, medium, low, rows)."""
+    # --- 1. Load companies (1 query) ---
     query = select(Company)
-
     if filters.industry:
         query = query.where(Company.industry == filters.industry)
     if filters.state:
@@ -176,13 +173,64 @@ def _query_leads(
         query = query.where(Company.status == filters.status)
 
     companies = db.execute(query).scalars().all()
+    if not companies:
+        return 0, 0, 0, 0, []
+
+    company_ids = [c.id for c in companies]
+
+    # --- 2. Bulk-load latest score per company (1 query) ---
+    max_scored_subq = (
+        select(LeadScore.company_id, func.max(LeadScore.scored_at).label("max_scored_at"))
+        .where(LeadScore.company_id.in_(company_ids))
+        .group_by(LeadScore.company_id)
+        .subquery()
+    )
+    score_rows = db.execute(
+        select(LeadScore).join(
+            max_scored_subq,
+            (LeadScore.company_id == max_scored_subq.c.company_id)
+            & (LeadScore.scored_at == max_scored_subq.c.max_scored_at),
+        )
+    ).scalars().all()
+    scores_by_company: dict[Any, LeadScore] = {s.company_id: s for s in score_rows}
+
+    # --- 3. Bulk-load latest feature per company (1 query) ---
+    max_feat_subq = (
+        select(
+            CompanyFeature.company_id,
+            func.max(CompanyFeature.computed_at).label("max_computed_at"),
+        )
+        .where(CompanyFeature.company_id.in_(company_ids))
+        .group_by(CompanyFeature.company_id)
+        .subquery()
+    )
+    feat_rows = db.execute(
+        select(CompanyFeature).join(
+            max_feat_subq,
+            (CompanyFeature.company_id == max_feat_subq.c.company_id)
+            & (CompanyFeature.computed_at == max_feat_subq.c.max_computed_at),
+        )
+    ).scalars().all()
+    features_by_company: dict[Any, CompanyFeature] = {f.company_id: f for f in feat_rows}
+
+    # --- 4. Bulk-load which companies have contacts (1 query) ---
+    contact_company_ids: set[Any] = set(
+        db.execute(
+            select(Contact.company_id)
+            .where(Contact.company_id.in_(company_ids))
+            .distinct()
+        ).scalars().all()
+    )
+
+    # --- 5. Assemble rows in Python ---
     applied_tier = forced_tier or filters.tier
     rows: list[dict[str, Any]] = []
 
     for company in companies:
-        feature = _latest_feature(db, company.id)
-        score = _latest_score(db, company.id)
-        row = _row_from_models(db, company, feature, score)
+        score = scores_by_company.get(company.id)
+        feature = features_by_company.get(company.id)
+        contact_found = company.id in contact_company_ids
+        row = _row_from_models(company, feature, score, contact_found)
 
         if applied_tier and row["tier"] != applied_tier:
             continue
@@ -196,14 +244,6 @@ def _query_leads(
             continue
 
         rows.append(row)
-
-    def _aware(dt: Any) -> datetime:
-        """Return an offset-aware datetime — makes naive DB timestamps comparable."""
-        if not dt:
-            return datetime.min.replace(tzinfo=timezone.utc)
-        if isinstance(dt, datetime) and dt.tzinfo is None:
-            return dt.replace(tzinfo=timezone.utc)
-        return dt
 
     if order_by == "score DESC":
         rows.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
@@ -224,6 +264,19 @@ def _query_leads(
 # ---------------------------------------------------------------------------
 # Routes  (literal paths before parameterised ones)
 # ---------------------------------------------------------------------------
+
+
+@router.get("/industries")
+def list_industries(db: Session = Depends(get_db)) -> list[str]:
+    """Return all distinct industry values present in the companies table, sorted."""
+    rows = db.execute(
+        select(Company.industry)
+        .where(Company.industry.isnot(None), Company.industry != "")
+        .distinct()
+        .order_by(Company.industry.asc())
+    ).scalars().all()
+    return [r for r in rows if r]
+
 
 @router.get("/high", response_model=LeadListResponse)
 def list_high_leads(
@@ -287,7 +340,7 @@ def get_lead(company_id: UUID, db: Session = Depends(get_db)) -> LeadResponse:
         logger.warning("Lead lookup failed; company_id=%s not found", company_id)
         raise HTTPException(status_code=404, detail=f"Lead {company_id} not found.")
 
-    row = _row_from_models(db, company, _latest_feature(db, company_id), _latest_score(db, company_id))
+    row = _row_from_models(company, _latest_feature(db, company_id), _latest_score(db, company_id))
     return _build_lead_row(row, fee)
 
 

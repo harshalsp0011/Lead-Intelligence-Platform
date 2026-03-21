@@ -1,10 +1,21 @@
 from __future__ import annotations
 
-"""Contact enrichment client for Analyst workflow.
+"""Contact and company enrichment client for Analyst workflow.
 
-This module finds decision-maker contacts using the provider configured in
-settings (`hunter` or `apollo`) and saves deduplicated contacts to the
-`contacts` table.
+Two distinct enrichment jobs:
+
+1. COMPANY DATA (Apollo organization enrichment)
+   enrich_company_data(domain) → employee_count, city, state
+   Called by gather_company_data when site data is missing after crawling.
+   Uses Apollo's free-tier organization enrichment endpoint:
+     POST https://api.apollo.io/api/v1/organizations/enrich  {domain: ...}
+   Returns org.num_employees, org.city, org.state.
+   Requires APOLLO_API_KEY. Returns {} silently if key missing or domain unknown.
+
+2. CONTACT FINDING (Hunter / Apollo)
+   find_contacts(company_name, domain, db) → saves decision-maker emails
+   Hunter: domain-search API returns CFO/VP/Facilities contacts.
+   Apollo: people-search API, same filtering logic.
 """
 
 import uuid
@@ -40,6 +51,58 @@ _TITLE_PRIORITY = {
     "vp operations": 4,
     "energy manager": 4,
 }
+
+
+def enrich_company_data(domain: str) -> dict[str, Any]:
+    """Call Apollo organization enrichment API and return available company signals.
+
+    Returns a dict with any subset of:
+        employee_count (int), city (str), state (str)
+
+    Returns empty dict if APOLLO_API_KEY is missing, domain is empty,
+    or Apollo has no record for the domain (404 / quota / error).
+
+    Apollo free tier covers organization enrichment.
+    API: POST https://api.apollo.io/api/v1/organizations/enrich
+         Body: {"domain": "example.com"}
+    """
+    settings = get_settings()
+    api_key = (settings.APOLLO_API_KEY or "").strip()
+    clean = _clean_domain(domain)
+
+    if not api_key or not clean:
+        return {}
+
+    try:
+        response = requests.post(
+            "https://api.apollo.io/api/v1/organizations/enrich",
+            headers={"x-api-key": api_key, "Content-Type": "application/json"},
+            json={"domain": clean},
+            timeout=10,
+        )
+        if response.status_code in {404, 402, 422}:
+            return {}
+        response.raise_for_status()
+        data = response.json()
+    except Exception:
+        return {}   # enrichment failure is never fatal
+
+    org = data.get("organization") or {}
+    result: dict[str, Any] = {}
+
+    emp = org.get("num_employees") or org.get("estimated_num_employees")
+    if emp and int(emp) > 0:
+        result["employee_count"] = int(emp)
+
+    city = _clean_string(org.get("city"))
+    state = _clean_string(org.get("state"))
+    if city:
+        result["city"] = city
+    if state:
+        from agents.scout.company_extractor import normalize_state  # noqa: PLC0415
+        result["state"] = normalize_state(state) or state
+
+    return result
 
 
 def find_contacts(company_name: str, website_domain: str, db_session: Session) -> list[dict[str, Any]]:

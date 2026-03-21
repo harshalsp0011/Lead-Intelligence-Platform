@@ -53,8 +53,11 @@ def crawl_company_site(website_url: str) -> dict[str, object]:
             "has_locations_page": False,
         }
 
-    sync_api = import_module("playwright.sync_api")
-    sync_playwright = sync_api.sync_playwright
+    try:
+        sync_api = import_module("playwright.sync_api")
+        _use_playwright = True
+    except ModuleNotFoundError:
+        _use_playwright = False
 
     homepage_html = ""
     homepage_text = ""
@@ -62,21 +65,38 @@ def crawl_company_site(website_url: str) -> dict[str, object]:
     locations_text = ""
     locations_url: Optional[str] = None
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        try:
-            page.goto(normalized_url, wait_until="domcontentloaded", timeout=15000)
-            homepage_html = page.content()
-            homepage_text = page.inner_text("body")
+    if _use_playwright:
+        sync_playwright = sync_api.sync_playwright  # type: ignore[possibly-undefined]
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            try:
+                page.goto(normalized_url, wait_until="domcontentloaded", timeout=15000)
+                homepage_html = page.content()
+                homepage_text = page.inner_text("body")
 
+                locations_url = find_locations_page(normalized_url, homepage_html)
+                if locations_url:
+                    page.goto(locations_url, wait_until="domcontentloaded", timeout=15000)
+                    locations_html = page.content()
+                    locations_text = page.inner_text("body")
+            finally:
+                browser.close()
+    else:
+        # Fallback: plain HTTP fetch with BeautifulSoup
+        _headers = {"User-Agent": "Mozilla/5.0 (compatible; LeadBot/1.0)"}
+        try:
+            resp = requests.get(normalized_url, headers=_headers, timeout=10)
+            homepage_html = resp.text
+            soup = BeautifulSoup(homepage_html, "html.parser")
+            homepage_text = soup.get_text(" ", strip=True)
             locations_url = find_locations_page(normalized_url, homepage_html)
             if locations_url:
-                page.goto(locations_url, wait_until="domcontentloaded", timeout=15000)
-                locations_html = page.content()
-                locations_text = page.inner_text("body")
-        finally:
-            browser.close()
+                resp2 = requests.get(locations_url, headers=_headers, timeout=10)
+                locations_html = resp2.text
+                locations_text = BeautifulSoup(locations_html, "html.parser").get_text(" ", strip=True)
+        except Exception:
+            pass
 
     text_for_counts = locations_text or homepage_text
     url_for_counts = locations_url or normalized_url

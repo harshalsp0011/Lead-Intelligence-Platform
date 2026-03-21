@@ -35,6 +35,36 @@
       "avg_sqft_per_site": 30000,
       "kwh_per_sqft_per_year": 10,
       "telecom_per_employee": 1500
+    },
+    {
+      "industry_bucket": "education",
+      "avg_sqft_per_site": 80000,
+      "kwh_per_sqft_per_year": 18,
+      "telecom_per_employee": 900
+    },
+    {
+      "industry_bucket": "technology",
+      "avg_sqft_per_site": 50000,
+      "kwh_per_sqft_per_year": 20,
+      "telecom_per_employee": 1400
+    },
+    {
+      "industry_bucket": "finance",
+      "avg_sqft_per_site": 40000,
+      "kwh_per_sqft_per_year": 22,
+      "telecom_per_employee": 1300
+    },
+    {
+      "industry_bucket": "logistics",
+      "avg_sqft_per_site": 200000,
+      "kwh_per_sqft_per_year": 15,
+      "telecom_per_employee": 800
+    },
+    {
+      "industry_bucket": "default",
+      "avg_sqft_per_site": 60000,
+      "kwh_per_sqft_per_year": 18,
+      "telecom_per_employee": 1000
     }
   ],
   "electricity_rate_by_state": {

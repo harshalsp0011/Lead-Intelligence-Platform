@@ -335,6 +335,23 @@ def _save_api_companies(
         ):
             continue
 
+        # employee_count and site_count: prefer pre-crawled signals (directory path),
+        # otherwise crawl the website now if we have one (Google Maps / Yelp path).
+        raw_emp = company.get("employee_count") or company.get("employee_signal")
+        raw_sites = company.get("site_count") or company.get("location_count")
+
+        website_val = company.get("website") or None
+        if website_val and (not raw_emp or not raw_sites):
+            try:
+                crawl = website_crawler.crawl_company_site(website_val)
+                raw_emp = raw_emp or crawl.get("employee_signal")
+                raw_sites = raw_sites or crawl.get("location_count")
+            except Exception:
+                pass  # crawl failure is non-fatal — score with whatever we have
+
+        emp_count = int(raw_emp) if raw_emp else None
+        site_count = int(raw_sites) if raw_sites else None
+
         try:
             row = Company(
                 id=uuid.uuid4(),
@@ -343,6 +360,8 @@ def _save_api_companies(
                 industry=industry,
                 city=city or None,
                 state=company_extractor.normalize_state(company.get("state")),
+                employee_count=emp_count,
+                site_count=site_count,
                 source=company.get("source"),
                 source_url=company.get("source_url"),
                 run_id=uuid.UUID(run_id) if run_id else None,

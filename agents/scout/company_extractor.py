@@ -218,7 +218,12 @@ def normalize_state(raw_state: Optional[str]) -> Optional[str]:
     if not raw_state:
         return None
 
-    normalized = re.sub(r"\s+", " ", raw_state.strip().lower())
+    stripped = raw_state.strip()
+    # Already a valid 2-letter code (e.g. Google Maps returns "NY" directly)
+    if len(stripped) == 2 and stripped.isalpha():
+        return stripped.upper()
+
+    normalized = re.sub(r"\s+", " ", stripped.lower())
     return _STATE_MAP.get(normalized)
 
 

@@ -94,6 +94,15 @@ function buildQueryString(params) {
 // ============================================================================
 
 /**
+ * Fetch all distinct industry values present in the companies table.
+ * Used to populate dynamic industry dropdowns / datalists.
+ * @returns {Promise<string[]>} - sorted list of industry strings
+ */
+export async function fetchIndustries() {
+  return fetchAPI('/leads/industries');
+}
+
+/**
  * 1. Fetch leads with optional filters
  * @param {object} filters - { industry, state, tier, status, min_score, page, page_size }
  * @returns {Promise<object>} - LeadListResponse data
@@ -364,10 +373,19 @@ export async function startChat(message) {
 /**
  * Poll for the result of a background chat run.
  * @param {string} runId - run_id returned by startChat
- * @returns {Promise<object>} - { status: "pending"|"done"|"error", reply, data, run_id }
+ * @returns {Promise<object>} - { status: "pending"|"done"|"error"|"cancelled", reply, data, run_id }
  */
 export async function fetchChatResult(runId) {
   return fetchAPI(`/chat/result/${runId}`);
+}
+
+/**
+ * Stop a chat run that is in progress.
+ * @param {string} runId - run_id to cancel
+ * @returns {Promise<object>} - { run_id, status }
+ */
+export async function stopChatRun(runId) {
+  return fetchAPI(`/chat/${runId}/stop`, { method: 'POST' });
 }
 
 // ============================================================================

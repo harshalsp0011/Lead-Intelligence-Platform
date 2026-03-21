@@ -18,9 +18,11 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import LoadingOverlay from '../components/LoadingOverlay';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   fetchLeads,
+  fetchIndustries,
   approveLead,
   rejectLead,
 } from '../services/api';
@@ -139,16 +141,7 @@ function PageHeader({ onExport, hasData }) {
 /**
  * FilterBar: Filter controls
  */
-function FilterBar({ filters, onFilterChange, onApply, onClear, isLoading }) {
-  const industries = [
-    { value: '', label: 'All Industries' },
-    { value: 'healthcare', label: 'Healthcare' },
-    { value: 'hospitality', label: 'Hospitality' },
-    { value: 'manufacturing', label: 'Manufacturing' },
-    { value: 'retail', label: 'Retail' },
-    { value: 'public_sector', label: 'Public Sector' },
-    { value: 'office', label: 'Office' },
-  ];
+function FilterBar({ filters, onFilterChange, onApply, onClear, isLoading, industries }) {
 
   const tiers = [
     { value: '', label: 'All Tiers' },
@@ -180,16 +173,17 @@ function FilterBar({ filters, onFilterChange, onApply, onClear, isLoading }) {
   return (
     <div className="bg-white rounded-lg shadow p-4 mb-6">
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-3">
-        {/* Industry */}
+        {/* Industry — dynamic from DB */}
         <select
           name="industry"
           value={filters.industry || ''}
           onChange={handleInputChange}
           className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
         >
+          <option value="">All Industries</option>
           {industries.map((ind) => (
-            <option key={ind.value} value={ind.value}>
-              {ind.label}
+            <option key={ind} value={ind}>
+              {ind.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
             </option>
           ))}
         </select>
@@ -552,6 +546,7 @@ export default function Leads() {
 
   const [sortField, setSortField] = useState('company_name');
   const [selectedLeads, setSelectedLeads] = useState([]);
+  const [industries, setIndustries] = useState([]);
 
   /**
    * Load leads with current filters
@@ -581,10 +576,11 @@ export default function Leads() {
   };
 
   /**
-   * Load leads on mount
+   * Load leads and industry list on mount
    */
   useEffect(() => {
     loadLeads();
+    fetchIndustries().then(setIndustries).catch(() => {});
   }, []);
 
   /**
@@ -725,7 +721,8 @@ export default function Leads() {
     .length;
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
+    <div className="h-full overflow-y-auto bg-gray-50 p-6">
+      {isLoading && <LoadingOverlay message="Loading leads..." />}
       <div className="max-w-7xl mx-auto">
         {/* Page Header */}
         <PageHeader onExport={handleExport} hasData={leads.length > 0} />
@@ -750,6 +747,7 @@ export default function Leads() {
           onApply={handleApplyFilters}
           onClear={handleClearFilters}
           isLoading={isLoading}
+          industries={industries}
         />
 
         {/* Lead Count Summary */}

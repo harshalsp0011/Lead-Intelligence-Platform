@@ -119,6 +119,7 @@ def run_scout(
 def run_analyst(
     company_ids: list[str],
     db_session: Session,
+    on_progress: Any = None,
 ) -> dict[str, Any]:
     """Score companies and return tier counts plus high-tier IDs.
 
@@ -129,7 +130,7 @@ def run_analyst(
 
     task = task_manager.assign_task(
         "analyst",
-        {"company_ids": company_ids},
+        {"company_ids": company_ids, "on_progress": on_progress},
         db_session,
     )
 

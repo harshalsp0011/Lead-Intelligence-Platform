@@ -197,6 +197,7 @@ def _dispatch(
         result = analyst_agent.run(
             company_ids=list(params.get("company_ids", [])),
             db_session=db_session,
+            on_progress=params.get("on_progress"),
         )
         return {"company_ids": result or []}
 

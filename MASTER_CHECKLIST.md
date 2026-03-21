@@ -7,6 +7,161 @@ Never remove a remaining item — mark it done instead.
 
 ---
 
+## Agent Flow Reference
+
+### Where does company data come from?
+
+All company data originates from the **Scout agent**. The Analyst never discovers companies — it only scores companies Scout already saved.
+
+**Scout → DB → Analyst** is the required order. You cannot run Analyst on a fresh DB.
+
+---
+
+### Scout Agent Flow
+
+Scout is triggered with: `industry`, `location`, `count`
+
+```
+Scout trigger (POST /trigger/scout or full pipeline)
+    │
+    ▼
+Phase 1: Configured directory sources (Yellow Pages etc. from DB)
+    │   scrape HTML → extract fields → classify industry → deduplicate → save
+    ▼
+Phase 2: Tavily dynamic search
+    │   Tavily finds directory URLs for that industry/location
+    │   → scrape each directory → extract → classify → deduplicate → save
+    ▼
+Phase 3: Google Maps / Yelp API (ranked by past performance)
+    │   returns structured results: name, address, category, phone, website
+    ▼
+For each company found:
+    ├─ extract_all_fields(html, text) → name, city, state, phone, website
+    ├─ classify_industry(category) → maps to: healthcare/hospitality/manufacturing/
+    │                                          retail/public_sector/office/education/...
+    ├─ normalize_state(raw) → two-letter code (e.g. "New York" → "NY")
+    ├─ duplicate check (by website domain OR name+city)
+    └─ save to companies table with status = 'new'
+```
+
+**What Scout saves per company (contract — same for ALL sources):**
+
+| Field | Google Maps | Yelp | Directory/Tavily | Notes |
+|---|---|---|---|---|
+| `name` | ✅ from API | ✅ from API | ✅ scraped | Required — dropped if missing |
+| `industry` | ✅ mapped from place type | ✅ mapped from category | ✅ classified | Required — dropped if unknown |
+| `city` | ✅ parsed from address | ✅ from location.city | ✅ scraped | Optional |
+| `state` | ✅ parsed from address (2-letter) | ✅ from location.state (2-letter) | ✅ extracted | Used for electricity rate |
+| `website` | ✅ websiteUri | ❌ Yelp never returns it | ✅ scraped | Yelp limitation — by design |
+| `employee_count` | ✅ crawled from website | ❌ no website to crawl | ✅ crawled | Yelp companies always NULL |
+| `site_count` | ✅ crawled from website | ❌ no website to crawl | ✅ crawled | Yelp companies always NULL |
+| `phone` | ✅ optional | ✅ optional | ✅ scraped | Optional |
+| `status` | `'new'` | `'new'` | `'new'` | Analyst targets new/enriched |
+
+**Crawl rule (all sources):** If `website` is present and `employee_count`/`site_count` are not already known, Scout crawls the website with requests+BeautifulSoup to extract those values before saving to DB. This ensures Analyst always has the best available data.
+
+**Yelp limitation:** Yelp's API never returns a business website URL — only the Yelp listing page. So Yelp companies will always have `website=NULL`, `employee_count=NULL`, `site_count=NULL`. The Analyst handles this gracefully (defaults to 1 site, 0 employees, lower data quality score → lower tier).
+
+**If a company has no website:** Scout still saves it. Only `name + industry + city` required.
+
+---
+
+### Analyst Agent Flow
+
+Analyst is triggered with: list of `company_ids` (status = `new` or `enriched`)
+
+```
+For each company_id:
+    │
+    ▼
+Step 1: Load company from DB
+    │   Gets: name, website, industry, state, employee_count, site_count
+    │
+    ▼
+Step 2: Gather/enrich data (website crawl — conditional)
+    │
+    ├─ IF website exists AND site_count = 0:
+    │       crawl website (requests + BeautifulSoup fallback if no Playwright)
+    │       → scan homepage + locations page for patterns like "50 locations", "200 employees"
+    │       → update site_count and employee_count for this scoring session
+    │
+    └─ IF no website OR site_count already set:
+            skip crawl — use existing DB values as-is
+    │
+    ▼
+Step 3: Calculate utility spend
+    │   Look up industry_benchmarks.json for:
+    │       avg_sqft_per_site × kwh_per_sqft × electricity_rate_by_state
+    │   + telecom_per_employee × employee_count
+    │   → total_spend ($/year estimate)
+    │
+    │   Unknown industry → falls back to 'default' benchmark (never crashes)
+    │
+    ▼
+Step 4: Calculate savings potential
+    │   total_spend × 8%  → savings_low
+    │   total_spend × 15% → savings_mid   ← used for scoring
+    │   total_spend × 24% → savings_high
+    │
+    ▼
+Step 5: Data quality score (0–10)
+    │   +points: has_website, has_locations_page, site_count > 1,
+    │            employee_count > 0, contact found in DB
+    │
+    ▼
+Step 6: Compute score (0–100)
+    │   Weighted formula:
+    │       savings_mid     → bigger savings = higher score
+    │       industry_fit    → healthcare/hospitality/manufacturing = 10
+    │                          office/public_sector = 7
+    │                          others = 5
+    │       site_count      → more sites = more spend = better lead
+    │       data_quality    → penalizes companies with missing data
+    │
+    ▼
+Step 7: Assign tier
+    │   score ≥ 70 → high
+    │   score ≥ 40 → medium
+    │   score < 40 → low
+    │
+    ▼
+Step 8: Save to DB
+        company_features row  → spend/savings/quality numbers
+        lead_scores row       → score + tier + reason text
+        company.status        → 'scored'
+```
+
+**What happens if data is missing:**
+
+| Missing data | Impact | Does it crash? |
+|---|---|---|
+| No website | No crawl, data_quality score drops | No |
+| No employee_count | telecom_spend = 0, lower total | No |
+| No site_count | defaults to 1 site in calculations | No |
+| No state | uses national average electricity rate | No |
+| Unknown industry | falls back to 'default' benchmark | No |
+| All missing | still scores — gets low score + low tier | No |
+
+---
+
+### Full Pipeline Order
+
+```
+Scout (finds companies, saves to DB with status='new')
+    ↓
+Analyst (scores companies, saves lead_scores, sets status='scored')
+    ↓
+Human approval (review scores on Leads page, approve/reject)
+    ↓
+Writer (drafts emails for approved high-tier companies)
+    ↓
+Outreach (sends approved email drafts)
+```
+
+Each stage is independent — you can trigger any stage alone via Triggers page.
+
+---
+
 ## Phase 0 — Foundation (Database Schema)
 Build the database tables that every agent and feature depends on.
 Nothing agentic can work without this foundation.
@@ -107,7 +262,7 @@ Analyst scores companies. Pipeline pauses. Human reviews and approves before Wri
 - [x] Approval email contains: list of scored companies, scores, link to review page
 - [x] `POST /approvals/leads` API route — marks selected leads as approved, rejects others
 - [x] On approval: `agent_runs.status` updates to `analyst_complete`, Writer starts
-- [ ] On rejection: run cancelled, `agent_runs.status` = `cancelled`
+- [x] On rejection: run cancelled, `agent_runs.status` = `cancelled`
 - [x] `human_approval_requests` row updated with `approved_by`, `approved_at`
 
 ### 2C — UI: Lead Review Page
@@ -124,38 +279,59 @@ Analyst scores companies. Pipeline pauses. Human reviews and approves before Wri
 
 ---
 
-## Phase 2.5 — Chat Resilience, Live Progress & UI Fixes
+## Phase 2.5 — Chat Resilience, Live Progress, UI Fixes & Chat Intelligence
 Bugs fixed and reliability improvements after Phase 2 deployment.
 
 ### Chat Backend
 - [x] `POST /chat` returns `run_id` immediately (background thread) — no more 30s browser timeout
 - [x] `GET /chat/result/{run_id}` endpoint added — frontend polls for completion
+- [x] `POST /chat/{run_id}/stop` endpoint added — marks run cancelled, frontend stops polling
 - [x] `agents/chat_agent.py` — `run_chat()` accepts optional pre-generated `run_id`
 - [x] Scout writes human-readable progress to `agent_run_logs` at every phase
 - [x] `GET /pipeline/run/{run_id}` returns ALL logs (was capped at 5)
 
-### Chat Frontend
+### Chat Agent: 3-Tier Routing
+- [x] **Tier 1 — Conversational**: greetings/small talk → direct LLM reply, no tools
+- [x] **Tier 2 — Intent pre-parser**: simple data queries (show leads, outreach history, replies) → Python extracts filters from message text, calls tool directly — LLM never guesses args
+- [x] **Tier 3 — Agent loop**: complex/multi-step requests → full LangChain agent with tools
+- [x] `_extract_lead_intent()` — extracts `tier` and `industry` from message without LLM
+- [x] `_extract_outreach_intent()` — detects history vs replies queries
+- [x] `get_leads` industry filter now case-insensitive (`func.lower()`)
+- [x] Fix: LLM was adding `tier=high` to all lead queries — now Python sets args directly
+- [x] System prompt updated with explicit `get_leads` arg examples to prevent hallucination
+
+### Chat Frontend: Observability
 - [x] Chat history persisted to `localStorage` — survives page refresh
 - [x] Both user AND agent messages (including data cards) saved and restored
 - [x] Active `run_id` persisted to `sessionStorage` — polling resumes if user navigates away mid-run
 - [x] On remount: if `sessionStorage` has `chat_active_run_id`, polling resumes immediately
-- [x] 404 edge case: if server restarted mid-run, shows "server restarted, try again" instead of polling forever
+- [x] **Stop button** in progress indicator — stops polling immediately, shows step summary
+- [x] On stop: detailed message shows every completed step + run ID + "check Leads page"
+- [x] On server restart (404): same detailed step summary instead of generic error
+- [x] **"View run logs"** expandable panel on every completed agent message — dark terminal showing full `AgentRunLog` from DB (status, companies found, scored, each step with agent/action/output)
+- [x] `progressStepsRef` — steps stored in ref so async callbacks always see latest value (no stale closure)
 - [x] Live `ProgressIndicator` replaces generic typing dots — shows `✓` / `→` step-by-step
 - [x] "Clear history" button added to Chat header
 
-### Leads Page Fix
+### Leads Page Fixes
 - [x] `GET /leads` 500 crash fixed — `_aware()` helper normalizes naive datetimes before sort
+- [x] **N+1 query fix**: was 177 DB roundtrips for 59 companies (3 queries each) → now 4 bulk queries total
+- [x] Load time: 9.2 seconds → 0.35 seconds
+- [x] **Scroll fixed**: `min-h-screen` → `h-full overflow-y-auto` — page scrolls inside app shell
+- [x] **Dynamic industry dropdown**: `GET /leads/industries` endpoint returns distinct DB values — no more hardcoded list
+- [x] Industry filter auto-updates as new industries are scouted
 - [x] Retry button added to error banner
 
 ### Triggers Page
 - [x] `ActiveRunStatus` now shows real result summary (companies saved, tiers, drafts) when run completes
 - [x] "View in Leads page →" button appears on completion
+- [x] Industry field changed from `<select>` to `<input type="text" list="...">` + `<datalist>` — free-type with DB suggestions
 - [x] Polls every 3s (was 5s)
 
 ### Scout Blocklist
 - [x] `_UNSCRAPPABLE_DOMAINS` blocklist added to `search_client.py` (27 domains)
-- [x] Sites that require login/paywall (glassdoor, zoominfo, seamless.ai, etc.) skipped immediately
-- [x] Scout reaches Google Maps/Yelp 60–90 seconds faster
+- [x] Sites that require login/paywall (glassdoor, zoominfo, seamless.ai, linkedin, etc.) skipped immediately
+- [x] Scout reaches Google Maps/Yelp 60–90 seconds faster per run
 
 ---
 
@@ -353,32 +529,51 @@ End-to-end verification that everything works together.
 |---|---|---|
 | 0 | Database foundation | ✅ Complete |
 | 1 | Chat agent + Scout expansion + UI visuals | ✅ Complete |
-| 2 | Analyst + human-in-loop leads review | Not started |
-| 3 | Writer critic loop + human-in-loop email review | Not started |
-| 4 | Outreach + Tracker + auto email notifications | Not started |
-| 5 | Airflow scheduled runs with approval pauses | Not started |
-| 6 | Learning activation (source + template selection) | Not started |
-| 7 | Full system test | Not started |
+| 2 | Analyst + human-in-loop leads review | ✅ Complete |
+| 2.5 | Chat resilience + live progress + UI fixes + chat intelligence | ✅ Complete |
+| 3 | Writer critic loop + human-in-loop email review | 🔲 Next |
+| 4 | Outreach + Tracker + auto email notifications | 🔲 Not started |
+| 5 | Airflow scheduled runs with approval pauses | 🔲 Not started |
+| 6 | Learning activation (source + template selection) | 🔲 Not started |
+| 7 | Full system test | 🔲 Not started |
 
 ---
 
-## Current State (as of Phase 1 complete)
+## Current State (as of Phase 2.5 complete — 2026-03-20)
 
-**Both containers are running:**
-- Frontend: http://localhost:3000 (nginx serving Vite build)
+**Running services:**
+- Frontend: http://localhost:3000 (React via nginx)
 - API: http://localhost:8001 (FastAPI + Uvicorn)
+- Database: PostgreSQL on AWS RDS (Heroku Postgres)
+- LLM: llama3.2 via Ollama at 192.168.65.254:11434 (host Mac)
 
 **What works right now:**
-- Chat → Ollama (llama3.2) → responds via `/chat` endpoint
-- Chat tools: `search_companies`, `get_leads`, `get_outreach_history`, `get_replies`, `run_full_pipeline`
-- Scout Live page: trigger form → `POST /trigger/scout` → polls every 3s for companies
-- All 6 dashboard pages render with correct layouts
-- API health: `GET /health` returns ok
 
-**What is wired but not yet tested end-to-end:**
-- Scout agent actually calling Google Maps / Yelp / Tavily (keys in .env)
-- Full pipeline: Scout → Analyst → Writer chain via orchestrator
-- Email drafting (Writer agent)
+| Feature | Status |
+|---|---|
+| Chat → Scout → find companies | ✅ Working |
+| Chat 3-tier routing (conversational / intent / agent) | ✅ Working |
+| Chat: "show me healthcare leads" → correct results | ✅ Working |
+| Chat: stop button + step-by-step summary | ✅ Working |
+| Chat: view run logs panel (expandable DB logs) | ✅ Working |
+| Chat history persists across refresh | ✅ Working |
+| Chat run survives page navigation | ✅ Working |
+| Leads page: 0.35s load (was 9.2s) | ✅ Working |
+| Leads page: scroll | ✅ Working |
+| Leads page: dynamic industry dropdown | ✅ Working |
+| Triggers page: free-type industry + run status | ✅ Working |
+| Scout: Google Maps + Yelp + Tavily | ✅ Working |
+| Scout: 27-domain blocklist (no login/paywall sites) | ✅ Working |
+| Analyst: scoring + lead tiers | ✅ Working |
+| Approve/reject leads via dashboard | ✅ Working |
+| Full pipeline: Scout → Analyst → Writer chain | ✅ Working |
+| Email drafting (Writer agent) | ✅ Working |
+| Email review page | ✅ Working |
 
-**Next phase to build: Phase 2**
-Analyst agent scores companies → human reviews via dashboard → approves before Writer runs.
+**Next phase to build: Phase 3 — Writer Critic Loop + Email Human Review**
+
+- Writer Critic evaluates draft quality (0–10 rubric), rewrites if score < 7 (up to 3 attempts)
+- Writer reads `email_win_rate` table to pick best-performing template per industry
+- Email review page: inline edit + approve/reject per draft
+- `POST /approvals/emails` API route
+- `approve_emails` and `draft_email` tools added to chat agent

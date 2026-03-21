@@ -21,11 +21,14 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
+import LoadingOverlay from '../components/LoadingOverlay';
 import { useNavigate } from 'react-router-dom';
 import {
   triggerFullPipeline,
   triggerScout,
   fetchTriggerStatus,
+  fetchIndustries,
+  fetchPipelineStatus,
 } from '../services/api';
 
 // ============================================================================
@@ -87,7 +90,7 @@ function PageHeader() {
 /**
  * RunFullPipelineCard: Full pipeline trigger with form
  */
-function RunFullPipelineCard({ onTrigger, isLoading, triggerStatus }) {
+function RunFullPipelineCard({ onTrigger, isLoading, disabled, knownIndustries }) {
   const [industry, setIndustry] = useState('healthcare');
   const [location, setLocation] = useState('Buffalo, NY');
   const [count, setCount] = useState(20);
@@ -110,21 +113,20 @@ function RunFullPipelineCard({ onTrigger, isLoading, triggerStatus }) {
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="grid md:grid-cols-2 gap-4">
-          {/* Industry */}
+          {/* Industry — free-type with DB suggestions */}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-2">Industry *</label>
-            <select
+            <input
+              type="text"
+              list="full-industry-list"
               value={industry}
               onChange={(e) => setIndustry(e.target.value)}
+              placeholder="e.g. healthcare, education, retail…"
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="healthcare">Healthcare</option>
-              <option value="hospitality">Hospitality</option>
-              <option value="manufacturing">Manufacturing</option>
-              <option value="retail">Retail</option>
-              <option value="public_sector">Public Sector</option>
-              <option value="office">Office</option>
-            </select>
+            />
+            <datalist id="full-industry-list">
+              {knownIndustries.map((ind) => <option key={ind} value={ind} />)}
+            </datalist>
           </div>
 
           {/* Location */}
@@ -162,22 +164,13 @@ function RunFullPipelineCard({ onTrigger, isLoading, triggerStatus }) {
         {/* Submit Button */}
         <button
           type="submit"
-          disabled={isLoading}
+          disabled={isLoading || disabled}
           className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 transition font-semibold"
         >
           {isLoading ? '⏳ Running...' : '▶️ Run Full Pipeline'}
         </button>
       </form>
 
-      {/* Trigger Status */}
-      {triggerStatus && triggerStatus.mode === 'full' && (
-        <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm">
-          <p>
-            <span className="font-semibold">{triggerStatus.status}</span>
-            {triggerStatus.progress && ` — ${triggerStatus.progress}`}
-          </p>
-        </div>
-      )}
     </div>
   );
 }
@@ -185,7 +178,7 @@ function RunFullPipelineCard({ onTrigger, isLoading, triggerStatus }) {
 /**
  * RunScoutOnlyCard: Scout-only trigger with form
  */
-function RunScoutOnlyCard({ onTrigger, isLoading, triggerStatus }) {
+function RunScoutOnlyCard({ onTrigger, isLoading, disabled, knownIndustries }) {
   const [industry, setIndustry] = useState('healthcare');
   const [location, setLocation] = useState('Buffalo, NY');
   const [count, setCount] = useState(20);
@@ -206,21 +199,20 @@ function RunScoutOnlyCard({ onTrigger, isLoading, triggerStatus }) {
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="grid md:grid-cols-2 gap-4">
-          {/* Industry */}
+          {/* Industry — free-type with DB suggestions */}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-2">Industry *</label>
-            <select
+            <input
+              type="text"
+              list="scout-industry-list"
               value={industry}
               onChange={(e) => setIndustry(e.target.value)}
+              placeholder="e.g. healthcare, education, retail…"
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="healthcare">Healthcare</option>
-              <option value="hospitality">Hospitality</option>
-              <option value="manufacturing">Manufacturing</option>
-              <option value="retail">Retail</option>
-              <option value="public_sector">Public Sector</option>
-              <option value="office">Office</option>
-            </select>
+            />
+            <datalist id="scout-industry-list">
+              {knownIndustries.map((ind) => <option key={ind} value={ind} />)}
+            </datalist>
           </div>
 
           {/* Location */}
@@ -258,22 +250,13 @@ function RunScoutOnlyCard({ onTrigger, isLoading, triggerStatus }) {
         {/* Submit Button */}
         <button
           type="submit"
-          disabled={isLoading}
+          disabled={isLoading || disabled}
           className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 transition font-semibold"
         >
           {isLoading ? '⏳ Finding...' : '🔍 Find Companies'}
         </button>
       </form>
 
-      {/* Trigger Status */}
-      {triggerStatus && triggerStatus.mode === 'scout' && (
-        <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg text-sm">
-          <p>
-            <span className="font-semibold">{triggerStatus.status}</span>
-            {triggerStatus.progress && ` — ${triggerStatus.progress}`}
-          </p>
-        </div>
-      )}
     </div>
   );
 }
@@ -281,7 +264,7 @@ function RunScoutOnlyCard({ onTrigger, isLoading, triggerStatus }) {
 /**
  * RunAnalystOnlyCard: Analyst-only trigger
  */
-function RunAnalystOnlyCard({ onTrigger, isLoading, triggerStatus, pendingAnalystCount }) {
+function RunAnalystOnlyCard({ onTrigger, isLoading, disabled, pendingAnalystCount }) {
   const handleSubmit = (e) => {
     e.preventDefault();
     onTrigger('analyst', {});
@@ -303,22 +286,13 @@ function RunAnalystOnlyCard({ onTrigger, isLoading, triggerStatus, pendingAnalys
       <form onSubmit={handleSubmit}>
         <button
           type="submit"
-          disabled={isLoading || pendingAnalystCount === 0}
+          disabled={isLoading || disabled || pendingAnalystCount === 0}
           className="w-full px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-400 transition font-semibold"
         >
           {isLoading ? '⏳ Scoring...' : '⭐ Score Now'}
         </button>
       </form>
 
-      {/* Trigger Status */}
-      {triggerStatus && triggerStatus.mode === 'analyst' && (
-        <div className="mt-4 p-3 bg-purple-50 border border-purple-200 rounded-lg text-sm">
-          <p>
-            <span className="font-semibold">{triggerStatus.status}</span>
-            {triggerStatus.progress && ` — ${triggerStatus.progress}`}
-          </p>
-        </div>
-      )}
     </div>
   );
 }
@@ -326,7 +300,7 @@ function RunAnalystOnlyCard({ onTrigger, isLoading, triggerStatus, pendingAnalys
 /**
  * RunWriterOnlyCard: Writer-only trigger
  */
-function RunWriterOnlyCard({ onTrigger, isLoading, triggerStatus, pendingWriterCount }) {
+function RunWriterOnlyCard({ onTrigger, isLoading, disabled, pendingWriterCount }) {
   const handleSubmit = (e) => {
     e.preventDefault();
     onTrigger('writer', {});
@@ -348,22 +322,13 @@ function RunWriterOnlyCard({ onTrigger, isLoading, triggerStatus, pendingWriterC
       <form onSubmit={handleSubmit}>
         <button
           type="submit"
-          disabled={isLoading || pendingWriterCount === 0}
+          disabled={isLoading || disabled || pendingWriterCount === 0}
           className="w-full px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:bg-gray-400 transition font-semibold"
         >
           {isLoading ? '⏳ Generating...' : '✉️ Generate Drafts'}
         </button>
       </form>
 
-      {/* Trigger Status */}
-      {triggerStatus && triggerStatus.mode === 'writer' && (
-        <div className="mt-4 p-3 bg-orange-50 border border-orange-200 rounded-lg text-sm">
-          <p>
-            <span className="font-semibold">{triggerStatus.status}</span>
-            {triggerStatus.progress && ` — ${triggerStatus.progress}`}
-          </p>
-        </div>
-      )}
     </div>
   );
 }
@@ -375,10 +340,11 @@ function ResultSummary({ summary, runMode, navigate }) {
   if (!summary) return null;
 
   // Scout returns {company_ids: [...]}
+  // Analyst returns {scored, high, medium, low, high_ids}
   // Full pipeline returns {companies_found, scored_high, scored_medium, contacts_found, drafts_created}
-  const companiesFound = summary.companies_found ?? summary.company_ids?.length ?? 0;
-  const scoredHigh = summary.scored_high ?? 0;
-  const scoredMedium = summary.scored_medium ?? 0;
+  const companiesFound = summary.companies_found ?? summary.scored ?? summary.company_ids?.length ?? 0;
+  const scoredHigh = summary.scored_high ?? summary.high ?? 0;
+  const scoredMedium = summary.scored_medium ?? summary.medium ?? 0;
   const drafts = summary.drafts_created ?? 0;
   const contacts = summary.contacts_found ?? 0;
 
@@ -424,7 +390,7 @@ function ResultSummary({ summary, runMode, navigate }) {
 /**
  * ActiveRunStatus: Live status with polling, shows result summary on completion
  */
-function ActiveRunStatus({ triggerId, pollInterval = 3000, navigate }) {
+function ActiveRunStatus({ triggerId, pollInterval = 3000, navigate, onComplete }) {
   const [status, setStatus] = useState(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const pollingRef = useRef(null);
@@ -442,6 +408,7 @@ function ActiveRunStatus({ triggerId, pollInterval = 3000, navigate }) {
         if (data.status === 'completed' || data.status === 'failed') {
           clearInterval(pollingRef.current);
           clearInterval(timerRef.current);
+          if (onComplete) onComplete();
         }
       } catch (err) {
         console.error('Failed to fetch trigger status:', err);
@@ -469,23 +436,65 @@ function ActiveRunStatus({ triggerId, pollInterval = 3000, navigate }) {
   };
   const colorClass = colorMap[status.status] || 'bg-gray-50 border-gray-200 text-gray-900';
 
+  const progress = status.progress || [];
+  const tierColor = (tier) => {
+    if (tier === 'high') return 'text-green-700 font-semibold';
+    if (tier === 'medium') return 'text-yellow-700 font-semibold';
+    return 'text-gray-500';
+  };
+
   return (
     <div className={`p-4 border rounded-lg ${colorClass} mb-6`}>
       <div className="flex justify-between items-center mb-1">
         <p className="font-bold">
-          {status.status === 'running' && '⏳ Running…'}
+          {status.status === 'running' && `⏳ Running… (${progress.length} processed)`}
           {status.status === 'completed' && '✅ Completed'}
           {status.status === 'failed' && '❌ Failed'}
         </p>
         <p className="text-sm font-mono">{formatElapsedTime(elapsedTime)}</p>
       </div>
 
-      {status.status === 'running' && (
-        <p className="text-sm">Agent is working — check back in a moment</p>
-      )}
-
       {status.status === 'failed' && (
         <p className="text-sm text-red-700 mt-1">{status.error_message || 'Unknown error'}</p>
+      )}
+
+      {/* Per-company progress log */}
+      {progress.length > 0 && (
+        <div className="mt-3 max-h-56 overflow-y-auto rounded border border-slate-200 bg-white text-xs font-mono">
+          <table className="w-full">
+            <thead className="sticky top-0 bg-slate-100 text-slate-500 text-left">
+              <tr>
+                <th className="px-2 py-1 w-8">#</th>
+                <th className="px-2 py-1">Company</th>
+                <th className="px-2 py-1 text-right">Score</th>
+                <th className="px-2 py-1 text-right">Tier</th>
+                <th className="px-2 py-1 text-right">Emp</th>
+                <th className="px-2 py-1 text-right">Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              {progress.map((p, i) => (
+                <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+                  <td className="px-2 py-0.5 text-slate-400">{p.idx}</td>
+                  <td className="px-2 py-0.5 truncate max-w-xs">
+                    {p.status === 'failed'
+                      ? <span className="text-red-500">✗ {p.name}</span>
+                      : <span className="text-slate-700">✓ {p.name}</span>
+                    }
+                  </td>
+                  <td className="px-2 py-0.5 text-right text-slate-600">{p.score ?? '—'}</td>
+                  <td className={`px-2 py-0.5 text-right ${tierColor(p.tier)}`}>{p.tier ?? '—'}</td>
+                  <td className="px-2 py-0.5 text-right text-slate-500">{p.employee_count ? p.employee_count.toLocaleString() : '—'}</td>
+                  <td className="px-2 py-0.5 text-right text-slate-400">{p.duration_s ?? '—'}s</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {status.status === 'running' && progress.length === 0 && (
+        <p className="text-sm mt-1">Starting — first company processing…</p>
       )}
 
       {status.status === 'completed' && (
@@ -509,28 +518,24 @@ function ActiveRunStatus({ triggerId, pollInterval = 3000, navigate }) {
 export default function Triggers() {
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
+  const [isPageLoading, setIsPageLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeTrigger, setActiveTrigger] = useState(null);
   const [triggerStatus, setTriggerStatus] = useState(null);
-  const [pendingCounts, setPendingCounts] = useState({
-    analyst: 0,
-    writer: 0,
-  });
+  const [pendingCounts, setPendingCounts] = useState({ analyst: 0, writer: 0 });
+  const [knownIndustries, setKnownIndustries] = useState([]);
 
-  /**
-   * Load initial pending counts
-   */
   useEffect(() => {
-    const loadPendingCounts = async () => {
-      // For now, use placeholder values
-      // In production, these would be fetched from API endpoints
-      setPendingCounts({
-        analyst: 12,
-        writer: 8,
-      });
-    };
-
-    loadPendingCounts();
+    Promise.allSettled([
+      fetchIndustries().then(setKnownIndustries).catch(() => {}),
+      fetchPipelineStatus()
+        .then((data) => {
+          const pendingAnalyst = (data['new'] || 0) + (data['enriched'] || 0);
+          const pendingWriter = data['approved'] || 0;
+          setPendingCounts({ analyst: pendingAnalyst, writer: pendingWriter });
+        })
+        .catch((err) => console.warn('Pipeline status fetch failed:', err)),
+    ]).finally(() => setIsPageLoading(false));
   }, []);
 
   /**
@@ -589,7 +594,8 @@ export default function Triggers() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
+    <div className="h-full overflow-y-auto bg-gray-50 p-6">
+      {(isPageLoading || isLoading) && <LoadingOverlay message={isPageLoading ? "Loading triggers..." : "Running agent..."} />}
       <div className="max-w-4xl mx-auto">
         <PageHeader />
 
@@ -599,35 +605,45 @@ export default function Triggers() {
           </div>
         )}
 
-        {activeTrigger && (
-          <ActiveRunStatus triggerId={activeTrigger} navigate={navigate} />
-        )}
-
         <RunFullPipelineCard
           onTrigger={handleTrigger}
-          isLoading={isLoading && (!triggerStatus || triggerStatus.mode === 'full')}
-          triggerStatus={triggerStatus}
+          isLoading={isLoading && triggerStatus?.mode === 'full'}
+          disabled={!!activeTrigger}
+          knownIndustries={knownIndustries}
         />
+        {activeTrigger && triggerStatus?.mode === 'full' && (
+          <ActiveRunStatus triggerId={activeTrigger} navigate={navigate} onComplete={() => setActiveTrigger(null)} />
+        )}
 
         <RunScoutOnlyCard
           onTrigger={handleTrigger}
-          isLoading={isLoading && (!triggerStatus || triggerStatus.mode === 'scout')}
-          triggerStatus={triggerStatus}
+          isLoading={isLoading && triggerStatus?.mode === 'scout'}
+          disabled={!!activeTrigger}
+          knownIndustries={knownIndustries}
         />
+        {activeTrigger && triggerStatus?.mode === 'scout' && (
+          <ActiveRunStatus triggerId={activeTrigger} navigate={navigate} onComplete={() => setActiveTrigger(null)} />
+        )}
 
         <RunAnalystOnlyCard
           onTrigger={handleTrigger}
-          isLoading={isLoading && (!triggerStatus || triggerStatus.mode === 'analyst')}
-          triggerStatus={triggerStatus}
+          isLoading={isLoading && triggerStatus?.mode === 'analyst'}
+          disabled={!!activeTrigger}
           pendingAnalystCount={pendingCounts.analyst}
         />
+        {activeTrigger && triggerStatus?.mode === 'analyst' && (
+          <ActiveRunStatus triggerId={activeTrigger} navigate={navigate} onComplete={() => setActiveTrigger(null)} />
+        )}
 
         <RunWriterOnlyCard
           onTrigger={handleTrigger}
-          isLoading={isLoading && (!triggerStatus || triggerStatus.mode === 'writer')}
-          triggerStatus={triggerStatus}
+          isLoading={isLoading && triggerStatus?.mode === 'writer'}
+          disabled={!!activeTrigger}
           pendingWriterCount={pendingCounts.writer}
         />
+        {activeTrigger && triggerStatus?.mode === 'writer' && (
+          <ActiveRunStatus triggerId={activeTrigger} navigate={navigate} onComplete={() => setActiveTrigger(null)} />
+        )}
       </div>
     </div>
   );

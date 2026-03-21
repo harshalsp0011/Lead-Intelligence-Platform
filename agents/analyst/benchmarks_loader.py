@@ -47,6 +47,11 @@ def get_benchmark(industry: str, state: str) -> dict[str, float]:
     )
 
     if matched_row is None:
+        matched_row = next(
+            (row for row in industry_rows if str(row.get("industry_bucket", "")).strip().lower() == "default"),
+            None,
+        )
+    if matched_row is None:
         raise ValueError(f"No benchmark found for industry '{industry}'")
 
     return {
