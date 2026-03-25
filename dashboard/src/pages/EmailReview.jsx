@@ -51,6 +51,24 @@ function getTierColor(tier) {
   return 'bg-gray-100 text-gray-800';
 }
 
+/**
+ * CriticBadge: shows the AI critic score (e.g. "8/10 ✓" or "5/10 ⚠")
+ */
+function CriticBadge({ score, rewrites }) {
+  if (score == null) return null;
+  const passed = score >= 7;
+  const color = passed
+    ? 'bg-green-100 text-green-800 border-green-200'
+    : 'bg-yellow-100 text-yellow-800 border-yellow-200';
+  const icon = passed ? '✓' : '⚠';
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-xs font-semibold ${color}`}>
+      AI {score.toFixed(1)}/10 {icon}
+      {rewrites > 0 && <span className="text-xs font-normal opacity-70">({rewrites}x rewrite)</span>}
+    </span>
+  );
+}
+
 // ============================================================================
 // SUB-COMPONENTS
 // ============================================================================
@@ -163,210 +181,256 @@ function BulkApproveSection({
 }
 
 /**
- * EmailReviewCard: Individual email draft review
+ * CompanyDraftCard: One card per company. If company has multiple drafts,
+ * shows navigation arrows to switch between them. Click header to expand
+ * full email view.
  */
-function EmailReviewCard({
-  email,
+function CompanyDraftCard({
+  drafts,
   onApprove,
   onReject,
   onRegenerate,
   isLoading,
   onToggleSelect,
-  isSelected,
+  selectedEmails,
 }) {
+  const [draftIdx, setDraftIdx] = useState(0);
+  const [isExpanded, setIsExpanded] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const [subject, setSubject] = useState(email.subject_line || '');
-  const [body, setBody] = useState(email.body || '');
   const [showRejectForm, setShowRejectForm] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
 
-  const handleApprove = async () => {
-    await onApprove(email.id);
+  const email = drafts[draftIdx];
+  const [subject, setSubject] = useState(email.subject_line || '');
+  const [body, setBody] = useState(email.body || '');
+  const hasMultiple = drafts.length > 1;
+
+  // Sync editable fields when navigating between drafts
+  const goTo = (idx) => {
+    setDraftIdx(idx);
+    setSubject(drafts[idx].subject_line || '');
+    setBody(drafts[idx].body || '');
+    setIsEditing(false);
+    setShowRejectForm(false);
+    setRejectReason('');
   };
 
-  const handleEditAndApprove = async () => {
+  const handleApprove = async () => {
     if (isEditing) {
-      // Save edits and approve
       await onApprove(email.id, subject, body);
       setIsEditing(false);
     } else {
-      setIsEditing(true);
+      await onApprove(email.id);
     }
   };
 
   const handleReject = async () => {
-    if (!rejectReason.trim()) {
-      alert('Please enter a rejection reason');
-      return;
-    }
+    if (!rejectReason.trim()) { alert('Please enter a rejection reason'); return; }
     await onReject(email.id, rejectReason);
-    setShowRejectForm(false);
   };
 
+  const isSelected = selectedEmails.has(email.id);
+
   return (
-    <div className="bg-white rounded-lg shadow p-6 mb-4">
-      {/* Header with selection */}
-      <div className="flex items-start gap-4 mb-4 pb-4 border-b">
-        <input
-          type="checkbox"
-          checked={isSelected}
-          onChange={(e) => onToggleSelect(email.id, e.target.checked)}
-          className="w-5 h-5 mt-1"
-        />
+    <div className="bg-white rounded-lg shadow mb-4 overflow-hidden border border-gray-200">
 
-        {/* Left section: Company info */}
-        <div className="flex-1">
-          <h3 className="text-xl font-bold text-gray-900 mb-2">{email.company_name}</h3>
-          <div className="flex gap-2 items-center flex-wrap mb-3">
-            <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-semibold">
-              {email.industry}
-            </span>
-            <span className={`px-2 py-1 rounded text-xs font-semibold ${getTierColor(email.tier)}`}>
-              {email.tier}
-            </span>
+      {/* ── COLLAPSED HEADER (always visible, click to expand) ── */}
+      <div
+        className="px-5 py-4 cursor-pointer hover:bg-gray-50 transition select-none"
+        onClick={() => setIsExpanded(v => !v)}
+      >
+        <div className="flex items-center gap-3">
+          {/* Checkbox — stop propagation so click doesn't toggle expand */}
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={(e) => { e.stopPropagation(); onToggleSelect(email.id, e.target.checked); }}
+            onClick={(e) => e.stopPropagation()}
+            className="w-4 h-4 flex-shrink-0"
+          />
+
+          {/* Company + meta */}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-bold text-gray-900 text-base">{email.company_name}</span>
+              {hasMultiple && (
+                <span className="bg-blue-100 text-blue-700 text-xs font-semibold px-2 py-0.5 rounded-full">
+                  {drafts.length} drafts
+                </span>
+              )}
+              {email.low_confidence && (
+                <span className="bg-yellow-100 text-yellow-800 text-xs font-semibold px-2 py-0.5 rounded-full">
+                  ⚠ Low confidence
+                </span>
+              )}
+              <CriticBadge score={email.critic_score} rewrites={email.rewrite_count || 0} />
+            </div>
+
+            {/* Subject preview */}
+            <p className="text-sm text-gray-600 mt-0.5 truncate">
+              <span className="font-semibold text-gray-500 mr-1">To:</span>
+              {email.contact_name || email.contact_email || 'No contact'}{email.contact_title ? ` · ${email.contact_title}` : ''}
+              <span className="mx-2 text-gray-300">|</span>
+              <span className="font-semibold text-gray-500 mr-1">Subject:</span>
+              {email.subject_line}
+            </p>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <p className="text-gray-600">Score</p>
-              <p className="font-bold text-gray-900">{email.lead_score}/100</p>
+          {/* Multi-draft navigation — stop propagation */}
+          {hasMultiple && (
+            <div className="flex items-center gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
+              <button
+                onClick={() => goTo(Math.max(0, draftIdx - 1))}
+                disabled={draftIdx === 0}
+                className="w-7 h-7 rounded border border-gray-300 flex items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-30 text-sm"
+              >‹</button>
+              <span className="text-xs font-semibold text-gray-600 w-10 text-center">
+                {draftIdx + 1}/{drafts.length}
+              </span>
+              <button
+                onClick={() => goTo(Math.min(drafts.length - 1, draftIdx + 1))}
+                disabled={draftIdx === drafts.length - 1}
+                className="w-7 h-7 rounded border border-gray-300 flex items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-30 text-sm"
+              >›</button>
             </div>
-            <div>
-              <p className="text-gray-600">Est. Savings</p>
-              <p className="font-bold text-gray-900">
-                {formatSavings(email.savings_low)} - {formatSavings(email.savings_high)}
-              </p>
-            </div>
-            <div>
-              <p className="text-gray-600">Est. TB Revenue</p>
-              <p className="font-bold text-gray-900">{formatSavings(email.revenue_estimate)}</p>
-            </div>
-          </div>
+          )}
+
+          {/* Expand toggle */}
+          <span className="text-gray-400 text-lg flex-shrink-0">{isExpanded ? '▲' : '▼'}</span>
         </div>
+      </div>
 
-        {/* Right section: Email details */}
-        <div className="flex-1 min-w-0">
-          <div className="space-y-3">
-            {/* TO Field */}
-            <div>
-              <p className="text-xs font-semibold text-gray-600 mb-1">TO</p>
-              <p className="text-sm text-gray-900">
-                {email.contact_name} — {email.contact_title || 'Contact'}
-              </p>
-              <p className="text-sm text-gray-600">{email.contact_email}</p>
+      {/* ── EXPANDED: full email view ── */}
+      {isExpanded && (
+        <div className="border-t border-gray-200">
+          {/* Email client header */}
+          <div className="bg-gray-50 px-6 py-4 space-y-2 text-sm border-b border-gray-200">
+            <div className="flex gap-3">
+              <span className="w-16 text-xs font-semibold text-gray-500 uppercase pt-0.5 flex-shrink-0">From</span>
+              <span className="text-gray-700">Your Consulting Firm</span>
             </div>
-
-            {/* Subject */}
-            <div>
-              <label className="text-xs font-semibold text-gray-600 mb-1 block">SUBJECT</label>
+            <div className="flex gap-3">
+              <span className="w-16 text-xs font-semibold text-gray-500 uppercase pt-0.5 flex-shrink-0">To</span>
+              <div>
+                {email.contact_name
+                  ? <span className="font-semibold text-gray-900">{email.contact_name}</span>
+                  : <span className="text-gray-500 italic">No contact found</span>
+                }
+                {email.contact_title && <span className="text-gray-500 ml-1">· {email.contact_title}</span>}
+                {email.contact_email && (
+                  <span className="ml-2 text-blue-600">&lt;{email.contact_email}&gt;</span>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <span className="w-16 text-xs font-semibold text-gray-500 uppercase pt-0.5 flex-shrink-0">Subject</span>
               {isEditing ? (
                 <input
                   type="text"
                   value={subject}
                   onChange={(e) => setSubject(e.target.value)}
-                  className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="flex-1 px-2 py-0.5 border border-blue-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               ) : (
-                <p className="text-sm text-gray-900 bg-gray-50 px-2 py-1 rounded">
-                  {subject}
-                </p>
+                <span className="font-semibold text-gray-900">{subject}</span>
               )}
             </div>
+            {email.savings_estimate && (
+              <div className="flex gap-3">
+                <span className="w-16 text-xs font-semibold text-gray-500 uppercase pt-0.5 flex-shrink-0">Savings</span>
+                <span className="text-green-700 font-semibold">{email.savings_estimate}</span>
+              </div>
+            )}
+            {email.template_used && (
+              <div className="flex gap-3">
+                <span className="w-16 text-xs font-semibold text-gray-500 uppercase pt-0.5 flex-shrink-0">Angle</span>
+                <span className="text-gray-500 text-xs bg-gray-200 rounded px-1.5 py-0.5">{email.template_used}</span>
+              </div>
+            )}
+          </div>
 
-            {/* Body */}
-            <div>
-              <label className="text-xs font-semibold text-gray-600 mb-1 block">BODY</label>
-              {isEditing ? (
-                <textarea
-                  value={body}
-                  onChange={(e) => setBody(e.target.value)}
-                  rows="5"
-                  className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              ) : (
-                <div className="text-sm text-gray-900 bg-gray-50 px-2 py-2 rounded max-h-32 overflow-y-auto whitespace-pre-wrap">
-                  {body}
-                </div>
-              )}
+          {/* Email body */}
+          <div className="px-6 py-5">
+            {isEditing ? (
+              <textarea
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                rows={12}
+                className="w-full px-3 py-2 border border-blue-300 rounded text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 leading-relaxed"
+              />
+            ) : (
+              <div className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed font-sans">
+                {body}
+              </div>
+            )}
+          </div>
+
+          {/* Rejection form */}
+          {showRejectForm && (
+            <div className="mx-6 mb-4 bg-red-50 border border-red-200 rounded-lg p-4">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Rejection Reason</label>
+              <textarea
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                rows={3}
+                className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-red-500 text-sm"
+                placeholder="Why are you rejecting this draft?"
+              />
             </div>
+          )}
+
+          {/* Action buttons */}
+          <div className="px-6 pb-5 flex gap-2 flex-wrap border-t border-gray-100 pt-4">
+            {!showRejectForm ? (
+              <>
+                <button
+                  onClick={handleApprove}
+                  disabled={isLoading}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 transition font-semibold text-sm"
+                >
+                  {isEditing ? '✓ Save & Send' : '✓ Approve & Send'}
+                </button>
+                <button
+                  onClick={() => setIsEditing(v => !v)}
+                  disabled={isLoading}
+                  className={`px-4 py-2 rounded-lg transition font-semibold text-sm ${isEditing ? 'bg-gray-200 text-gray-700 hover:bg-gray-300' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+                >
+                  {isEditing ? 'Cancel Edit' : '✎ Edit'}
+                </button>
+                <button
+                  onClick={() => setShowRejectForm(true)}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-semibold text-sm"
+                >
+                  ✗ Reject
+                </button>
+                <button
+                  onClick={() => onRegenerate(email.id)}
+                  disabled={isLoading}
+                  className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:bg-gray-400 transition font-semibold text-sm"
+                >
+                  ↻ Regenerate
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={handleReject}
+                  disabled={isLoading}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-gray-400 transition font-semibold text-sm"
+                >
+                  {isLoading ? '...' : 'Confirm Reject'}
+                </button>
+                <button
+                  onClick={() => { setShowRejectForm(false); setRejectReason(''); }}
+                  className="px-4 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400 transition font-semibold text-sm"
+                >
+                  Cancel
+                </button>
+              </>
+            )}
           </div>
         </div>
-      </div>
-
-      {/* Rejection form */}
-      {showRejectForm && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
-          <label className="block text-sm font-semibold text-gray-700 mb-2">
-            Rejection Reason
-          </label>
-          <textarea
-            value={rejectReason}
-            onChange={(e) => setRejectReason(e.target.value)}
-            rows="3"
-            className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-red-500 text-sm"
-            placeholder="Explain why you're rejecting this email..."
-          />
-        </div>
       )}
-
-      {/* Action buttons */}
-      <div className="flex gap-2 flex-wrap">
-        {!showRejectForm && (
-          <>
-            <button
-              onClick={handleApprove}
-              disabled={isLoading}
-              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 transition font-semibold text-sm"
-            >
-              ✓ Approve
-            </button>
-
-            <button
-              onClick={handleEditAndApprove}
-              disabled={isLoading}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 transition font-semibold text-sm"
-            >
-              {isEditing ? 'Save & Approve' : 'Edit & Approve'}
-            </button>
-
-            <button
-              onClick={() => setShowRejectForm(true)}
-              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-semibold text-sm"
-            >
-              ✗ Reject
-            </button>
-
-            <button
-              onClick={() => onRegenerate(email.id)}
-              disabled={isLoading}
-              className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:bg-gray-400 transition font-semibold text-sm"
-            >
-              ↻ Regenerate
-            </button>
-          </>
-        )}
-
-        {showRejectForm && (
-          <>
-            <button
-              onClick={handleReject}
-              disabled={isLoading}
-              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-gray-400 transition font-semibold text-sm"
-            >
-              {isLoading ? '...' : 'Confirm Reject'}
-            </button>
-            <button
-              onClick={() => {
-                setShowRejectForm(false);
-                setRejectReason('');
-              }}
-              className="px-4 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400 transition font-semibold text-sm"
-            >
-              Cancel
-            </button>
-          </>
-        )}
-      </div>
     </div>
   );
 }
@@ -386,6 +450,8 @@ export default function EmailReview() {
   const [selectedEmails, setSelectedEmails] = useState(new Set());
   const [approvalProgress, setApprovalProgress] = useState(0);
   const [approvedCount, setApprovedCount] = useState(0);
+  // 'all' | 'named' | 'generic'
+  const [contactFilter, setContactFilter] = useState('all');
 
   /**
    * Load pending emails
@@ -395,7 +461,7 @@ export default function EmailReview() {
     setError(null);
     try {
       const response = await fetchPendingEmails();
-      const emailsWithSelected = (response.data || []).map((email) => ({
+      const emailsWithSelected = (response.drafts || []).map((email) => ({
         ...email,
         selected: false,
       }));
@@ -551,6 +617,15 @@ export default function EmailReview() {
     selected: selectedEmails.has(e.id),
   }));
 
+  const namedCount = emails.filter(e => e.contact_name && e.contact_name.trim()).length;
+  const genericCount = emails.filter(e => !e.contact_name || !e.contact_name.trim()).length;
+
+  const filteredEmails = emailsWithSelected.filter(e => {
+    if (contactFilter === 'named') return e.contact_name && e.contact_name.trim();
+    if (contactFilter === 'generic') return !e.contact_name || !e.contact_name.trim();
+    return true;
+  });
+
   return (
     <div className="h-full overflow-y-auto bg-gray-50 p-6">
       {isLoading && <LoadingOverlay message="Loading emails..." />}
@@ -565,6 +640,30 @@ export default function EmailReview() {
 
         <PendingCountBanner pendingCount={emails.length} />
 
+        {/* Contact filter bar */}
+        {emails.length > 0 && (
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-sm font-semibold text-gray-500 mr-1">Contact:</span>
+            {[
+              { key: 'all', label: `All (${emails.length})` },
+              { key: 'named', label: `Named Contact (${namedCount})` },
+              { key: 'generic', label: `Generic / Assumed (${genericCount})` },
+            ].map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setContactFilter(key)}
+                className={`px-3 py-1.5 rounded-full text-sm font-semibold border transition ${
+                  contactFilter === key
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400 hover:text-blue-600'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {emails.length > 0 && (
           <BulkApproveSection
             emails={emailsWithSelected}
@@ -577,25 +676,35 @@ export default function EmailReview() {
           />
         )}
 
-        {emails.length > 0 ? (
+        {filteredEmails.length > 0 ? (
           <div>
-            {emailsWithSelected.map((email) => (
-              <EmailReviewCard
-                key={email.id}
-                email={email}
+            {/* Group drafts by company_id — multi-contact companies get one card with navigation */}
+            {Object.values(
+              filteredEmails.reduce((groups, email) => {
+                const key = email.company_id;
+                if (!groups[key]) groups[key] = [];
+                groups[key].push(email);
+                return groups;
+              }, {})
+            ).map((drafts) => (
+              <CompanyDraftCard
+                key={drafts[0].company_id}
+                drafts={drafts}
                 onApprove={handleApproveEmail}
                 onReject={handleRejectEmail}
                 onRegenerate={handleRegenerate}
                 isLoading={isApproving}
                 onToggleSelect={handleToggleSelect}
-                isSelected={selectedEmails.has(email.id)}
+                selectedEmails={selectedEmails}
               />
             ))}
           </div>
         ) : (
           <div className="bg-white rounded-lg shadow p-12 text-center">
             <p className="text-gray-500 text-lg">
-              ✓ All caught up — no emails pending review
+              {contactFilter !== 'all'
+                ? `No ${contactFilter === 'named' ? 'named contact' : 'generic'} drafts in queue`
+                : '✓ All caught up — no emails pending review'}
             </p>
           </div>
         )}

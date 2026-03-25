@@ -2,7 +2,9 @@
 # Reference Document: Design, Data Flow, Execution, Testing
 
 > Last updated: 2026-03-22
-> Status: Implementation starting
+> Status: ✅ COMPLETE (2026-03-24)
+> **This was a pre-implementation design doc. See `docs/AGENTIC_DESIGN.md` for the
+> authoritative description of the built system.**
 
 ---
 

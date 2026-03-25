@@ -38,6 +38,10 @@ class PipelineStatusResponse(BaseModel):
     pipeline_value_mid: float
     pipeline_value_formatted: str
     last_updated: datetime
+    contacts_with: int = 0      # companies that have at least 1 contact saved
+    contacts_needed: int = 0    # scored/approved companies still missing a contact
+    pending_analyst: int = 0    # new/enriched companies waiting to be scored
+    pending_writer: int = 0     # approved companies with no draft yet (true writer queue)
 
 
 class AgentHealthResponse(BaseModel):

@@ -47,7 +47,7 @@ check_agent_health() probes:
 - airflow (http://localhost:8080/health)
 - sendgrid key configured
 - tavily key configured
-- slack webhook configured
+- sendgrid from email configured
 
 orchestrator.py
 Main Orchestrator Agent entry point that controls the complete lead-generation
@@ -77,7 +77,7 @@ Main functions:
 Agent dispatch table:
 - 'scout'    → scout_agent.run(industry, location, count, db_session)
 - 'analyst'  → analyst_agent.run(company_ids, db_session)
-- 'writer'   → writer_agent.run(company_ids, db_session)
+- 'writer'   → writer_agent.run(company_ids, db_session, run_id)  ← run_id for AgentRun tracking
 - 'outreach' → outreach_agent.process_followup_queue(db_session)
 - 'tracker'  → tracker_agent.run_daily_checks(db_session)
 
@@ -96,6 +96,11 @@ Agent dispatch table:
 
 ## Container
 
-- Dockerfile: `agents/orchestrator/Dockerfile`
-- Service name in compose: `orchestrator`
-- Container command: `python agents/orchestrator/orchestrator.py`
+All agents (including orchestrator) run inside the `api` container — there is no separate
+orchestrator container. The `api` service imports and calls agent modules directly.
+
+```
+docker-compose up
+  ├── api       (port 8001)  FastAPI + all agents in one process
+  └── frontend  (port 3000)  nginx + React
+```

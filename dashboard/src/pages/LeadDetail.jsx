@@ -33,6 +33,7 @@ import {
   regenerateEmail,
   approveEmail,
   editEmail,
+  enrichLead,
 } from '../services/api';
 
 // ============================================================================
@@ -139,6 +140,11 @@ function CompanyHeader({ lead, isLoading }) {
                 📍 {lead.city}, {lead.state}
               </span>
             )}
+            {lead.phone && (
+              <a href={`tel:${lead.phone}`} className="text-green-700 font-medium text-sm">
+                📞 {lead.phone}
+              </a>
+            )}
             {lead.website && (
               <a
                 href={lead.website}
@@ -147,6 +153,17 @@ function CompanyHeader({ lead, isLoading }) {
                 className="text-blue-600 hover:underline text-sm"
               >
                 🌐 Visit Website
+              </a>
+            )}
+            {lead.linkedin_search_url && (
+              <a
+                href={lead.linkedin_search_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-700 hover:underline text-sm"
+                title="Search this company on LinkedIn"
+              >
+                🔗 LinkedIn
               </a>
             )}
           </div>
@@ -163,13 +180,20 @@ function CompanyHeader({ lead, isLoading }) {
  * FinancialEstimatesPanel: Spending and savings estimates
  */
 function FinancialEstimatesPanel({ lead }) {
-  const savingsMid = lead.savings_estimate_mid || 0;
-  const revenueEstimate = Math.round(savingsMid * 0.24);
+  const savingsMid = lead.savings_mid || 0;
+  const revenueEstimate = lead.tb_revenue_estimate || Math.round(savingsMid * 0.24);
+  const notScored = !lead.score || lead.status === 'new';
 
   return (
     <div className="bg-white rounded-lg shadow p-6 mb-6">
       <h2 className="text-lg font-bold text-gray-900 mb-4">Financial Estimates</h2>
-      
+
+      {notScored && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 mb-4 text-amber-800 text-sm">
+          ⏳ Analyst has not run yet — estimates will appear after scoring.
+        </div>
+      )}
+
       <div className="grid md:grid-cols-3 gap-6 mb-6 pb-6 border-b">
         <div>
           <p className="text-sm text-gray-600 mb-1">Estimated Annual Utility Spend</p>
@@ -186,10 +210,7 @@ function FinancialEstimatesPanel({ lead }) {
         <div>
           <p className="text-sm text-gray-600 mb-1">Total Estimated Spend</p>
           <p className="text-2xl font-bold text-gray-900">
-            {formatSavings(
-              (lead.estimated_annual_utility_spend || 0) +
-                (lead.estimated_annual_telecom_spend || 0)
-            )}
+            {formatSavings(lead.estimated_total_spend)}
           </p>
         </div>
       </div>
@@ -198,17 +219,19 @@ function FinancialEstimatesPanel({ lead }) {
         <div>
           <p className="text-sm text-gray-600 mb-1">Savings Low</p>
           <p className="text-2xl font-bold text-gray-900">
-            {formatSavings(lead.savings_estimate_low)}
+            {lead.savings_low_formatted || formatSavings(lead.savings_low)}
           </p>
         </div>
         <div className="p-4 bg-green-50 rounded-lg border-2 border-green-300">
           <p className="text-sm text-gray-600 mb-1">Savings Mid (Estimate)</p>
-          <p className="text-2xl font-bold text-green-700">{formatSavings(savingsMid)}</p>
+          <p className="text-2xl font-bold text-green-700">
+            {lead.savings_mid_formatted || formatSavings(savingsMid)}
+          </p>
         </div>
         <div>
           <p className="text-sm text-gray-600 mb-1">Savings High</p>
           <p className="text-2xl font-bold text-gray-900">
-            {formatSavings(lead.savings_estimate_high)}
+            {lead.savings_high_formatted || formatSavings(lead.savings_high)}
           </p>
         </div>
       </div>
@@ -224,12 +247,24 @@ function FinancialEstimatesPanel({ lead }) {
 /**
  * ScoreBreakdownPanel: Lead score, tier, factors
  */
-function ScoreBreakdownPanel({ lead, onApprove, onReject, isLoadingAction }) {
+function ScoreBreakdownPanel({ lead, onApprove, onReject, onEnrich, isLoadingAction, isLoadingEnrich }) {
+  // Compute factor scores from available data using the same weights as score_engine.py
+  const savingsMid = lead.savings_mid || 0;
+  const recoveryScore = savingsMid >= 2000000 ? 40 : savingsMid >= 1000000 ? 34 : savingsMid >= 500000 ? 28 : savingsMid >= 250000 ? 22 : 16;
+  const industryFitRaw = lead.industry_fit_score || 0;  // 0–100 raw score stored in features
+  const industryScore = Math.round(industryFitRaw * 0.25);  // weight 0.25 → max 25
+  const siteCount = lead.site_count || 0;
+  const multisiteScore = siteCount >= 20 ? 20 : siteCount >= 10 ? 17 : siteCount >= 5 ? 13 : siteCount >= 2 ? 8 : 3;
+  const dqRaw = lead.data_quality_score || 0;  // 0–10 quality score
+  const dataQualityScore = dqRaw >= 9 ? 15 : dqRaw >= 7 ? 12 : dqRaw >= 5 ? 8 : dqRaw >= 3 ? 4 : 1;
+
+  const notScored = !lead.score || lead.status === 'new';
+
   const factors = [
-    { name: 'Recovery Potential', actual: lead.factor_recovery_potential || 0, max: 40 },
-    { name: 'Industry Fit', actual: lead.factor_industry_fit || 0, max: 25 },
-    { name: 'Multi-site', actual: lead.factor_multisite || 0, max: 20 },
-    { name: 'Data Quality', actual: lead.factor_data_quality || 0, max: 15 },
+    { name: 'Recovery Potential', actual: notScored ? 0 : recoveryScore, max: 40 },
+    { name: 'Industry Fit', actual: notScored ? 0 : industryScore, max: 25 },
+    { name: 'Multi-site', actual: notScored ? 0 : multisiteScore, max: 20 },
+    { name: 'Data Quality', actual: notScored ? 0 : dataQualityScore, max: 15 },
   ];
 
   return (
@@ -237,16 +272,23 @@ function ScoreBreakdownPanel({ lead, onApprove, onReject, isLoadingAction }) {
       <div className="flex items-start gap-6 mb-6 pb-6 border-b">
         <div className="text-center">
           <p className="text-sm text-gray-600 mb-2">Lead Score</p>
-          <p className="text-5xl font-bold text-blue-600">{lead.lead_score}</p>
+          {notScored ? (
+            <p className="text-2xl font-bold text-amber-500">pending</p>
+          ) : (
+            <p className="text-5xl font-bold text-blue-600">{lead.score}</p>
+          )}
           <p className="text-sm text-gray-600 mt-2">/ 100</p>
         </div>
         <div className="flex-1">
           <div className="mb-4">
             <span className={`px-3 py-1 rounded text-sm font-semibold ${getTierColor(lead.tier)}`}>
-              {lead.tier.toUpperCase()} TIER
+              {(lead.tier || 'unknown').toUpperCase()} TIER
             </span>
+            {notScored && (
+              <span className="ml-2 text-xs text-amber-600 font-semibold">— not yet analyzed</span>
+            )}
           </div>
-          <p className="text-gray-700">{lead.score_explanation || 'Strong lead based on multiple factors.'}</p>
+          <p className="text-gray-700">{lead.score_reason || (notScored ? 'Run Analyst to score this company.' : 'Strong lead based on multiple factors.')}</p>
         </div>
       </div>
 
@@ -272,8 +314,8 @@ function ScoreBreakdownPanel({ lead, onApprove, onReject, isLoadingAction }) {
         </div>
       </div>
 
-      <div className="flex gap-2">
-        {lead.status !== 'approved' && (
+      <div className="flex gap-2 flex-wrap">
+        {!lead.approved_human && lead.score > 0 && lead.status !== 'approved' && (
           <button
             onClick={onApprove}
             disabled={isLoadingAction}
@@ -282,7 +324,7 @@ function ScoreBreakdownPanel({ lead, onApprove, onReject, isLoadingAction }) {
             {isLoadingAction ? '...' : '✓ Approve Lead'}
           </button>
         )}
-        {lead.status !== 'rejected' && (
+        {lead.status !== 'archived' && (
           <button
             onClick={onReject}
             disabled={isLoadingAction}
@@ -291,6 +333,14 @@ function ScoreBreakdownPanel({ lead, onApprove, onReject, isLoadingAction }) {
             {isLoadingAction ? '...' : '✗ Reject Lead'}
           </button>
         )}
+        <button
+          onClick={onEnrich}
+          disabled={isLoadingEnrich}
+          className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:bg-gray-400 transition font-semibold"
+          title="Find contacts via Hunter/Apollo for this company"
+        >
+          {isLoadingEnrich ? '⏳ Enriching...' : '👤 Find Contacts'}
+        </button>
       </div>
     </div>
   );
@@ -720,6 +770,7 @@ export default function LeadDetail() {
   const [error, setError] = useState(null);
   const [reviewDraft, setReviewDraft] = useState(null);
   const [isLoadingRegen, setIsLoadingRegen] = useState(false);
+  const [isLoadingEnrich, setIsLoadingEnrich] = useState(false);
 
   /**
    * Load lead data
@@ -774,6 +825,26 @@ export default function LeadDetail() {
       setError('Failed to reject lead.');
     } finally {
       setIsLoadingAction(false);
+    }
+  };
+
+  /**
+   * Trigger contact enrichment for this company
+   */
+  const handleEnrichLead = async () => {
+    setIsLoadingEnrich(true);
+    try {
+      const result = await enrichLead(companyId);
+      if (result.contacts_found > 0 || result.success) {
+        const data = await fetchLeadById(companyId);
+        setLead(data);
+      }
+      setError(null);
+    } catch (err) {
+      console.error('Enrichment failed:', err);
+      setError('Enrichment failed. Check if Hunter/Apollo API key is configured.');
+    } finally {
+      setIsLoadingEnrich(false);
     }
   };
 
@@ -880,7 +951,9 @@ export default function LeadDetail() {
           lead={lead}
           onApprove={handleApproveLead}
           onReject={handleRejectLead}
+          onEnrich={handleEnrichLead}
           isLoadingAction={isLoadingAction}
+          isLoadingEnrich={isLoadingEnrich}
         />
 
         <ContactsPanel

@@ -258,21 +258,21 @@ Tier: **≥70 = high**, **40–69 = medium**, **<40 = low**
 
 ---
 
-### Writer Agent — Agentic Draft Generation (Phase 3)
-
-**Current:** template fill → LLM polish → done (no quality check)
-
-**Being upgraded to (Phase 3):** LLM reasons about company context to pick the right angle, Critic agent evaluates the draft, rewrite loop if quality < 7.
+### Writer Agent — Agentic Draft Generation ✅ Complete (Phase 3)
 
 ```
-Writer: reads company data, reasons about best angle → generates full email
+Writer: queries email_win_rate for best angle → reads company data + score_reason
+  → reasons about which angle fits this company → generates full email (subject + body + ANGLE)
   ↓
-Critic: evaluates 0–10 (personalized? specific number? clear CTA? sounds human?)
-  → score=6, reason="no savings figure", instruction="add $180k estimate"
+Critic: evaluates 0–10 (personalised? specific number? clear CTA? sounds human? subject specific?)
+  → score=6, feedback="no savings figure", instruction="add $180k estimate in paragraph 2"
   ↓
-If score < 7: Writer rewrites with Critic feedback → re-evaluate (max 2 loops)
+If score < 7: Writer rewrites using Critic feedback → re-evaluate (max 2 rewrites)
 If score ≥ 7: save draft → human review queue
-If still < 7 after 2 rewrites: save with low_confidence=true
+If still < 7 after 2 rewrites: save with low_confidence=true → flagged in UI
+
+Angle chosen (e.g. "audit_offer") saved as template_used → Tracker updates email_win_rate on reply
+→ next Writer run reads it and biases toward winning angle for this industry
 ```
 
 ---
@@ -330,9 +330,10 @@ Every tool call appends one `agent_run_logs` row — full audit trail of every a
 | **1** | Chat agent + Scout (4 sources) + full React dashboard + Docker | ✅ Complete |
 | **2** | Analyst scoring + human lead review + approval notifications | ✅ Complete |
 | **2.5** | Chat resilience, live progress, UI fixes, chat intelligence | ✅ Complete |
+| **2.6** | Contact enrichment hardening — waterfall, Prospeo, ZeroBounce, quality gates | ✅ Complete |
+| **3** | Writer + Critic loop + win rate learning + run tracking + email approval notification | ✅ Complete |
 | **A** | Agentic Analyst — LLM industry inference, data gap loop, score narration | 🔲 Next |
 | **B** | Agentic Scout — LLM query planning, deduplication, quality loop | 🔲 Next |
-| **3** | Agentic Writer + Critic loop + human email review checkpoint | 🔲 Planned |
 | **4** | Outreach sending + Tracker + auto reply email alerts | 🔲 Planned |
 | **5** | Airflow scheduled runs with approval pause points | 🔲 Planned |
 | **6** | Learning activation (source ranking + angle selection) | 🔲 Planned |
@@ -346,12 +347,19 @@ See `AGENTIC_TRANSFORMATION_PLAN.md` for the full agentic reasoning design.
 - Chat: `"show me healthcare leads"` → correct filtered results
 - Chat: `"approve these leads"` → marks leads approved in DB
 - Scout Live page — trigger a search, watch companies appear in real time
-- Leads page — 0.35s load, filter/review/approve leads with correct score + savings
-- Analyst scoring — runs after Scout, scores 0–100, tiers, correct `scored_at` timestamp
+- Leads page — filter/review/approve leads with correct score + savings
+- Analyst scoring — runs after Scout, scores 0–100, tiers, narrative score reason
 - Analyst: Apollo fallback for `employee_count` enrichment when crawl fails
-- Triggers page — per-company live progress table, results stay after completion
-- Approval email — SendGrid notification sent to `ALERT_EMAIL` after Analyst finishes
-- Email Review page — approve/reject/edit drafted emails
+- Contact enrichment — 8-step waterfall (Hunter → Apollo → scraper → Serper → Snov → Prospeo → ZeroBounce → permutation → generic fallback)
+- Phone enrichment — Google Places → Yelp → website scraper
+- Triggers page — per-company live progress, results stay after completion
+- Writer — context-aware LLM generation, Critic loop (max 2 rewrites), `low_confidence` flag
+- Writer reads `email_win_rate` for best angle per industry (learning layer)
+- Writer run tracking — `AgentRun` row with live `drafts_created` counter
+- Approval email (leads) — SendGrid notification after Analyst finishes
+- Approval email (drafts) — SendGrid notification after Writer finishes, lists all drafts with AI scores
+- Email Review page — approve / edit+approve / reject / regenerate per draft
+- Reject → company resets to `approved`, re-appears in Generate Drafts queue
 
 **What is NOT agentic yet (being upgraded in Phases A + B):**
 
@@ -359,7 +367,6 @@ See `AGENTIC_TRANSFORMATION_PLAN.md` for the full agentic reasoning design.
 |---|---|---|
 | Analyst | exact string match for industry, silently uses 0 for missing data | Phase A: LLM infers industry, detects gaps, re-enriches |
 | Scout | one fixed query per source | Phase B: LLM generates query variants, parallel, quality loop |
-| Writer | template fill + LLM polish, no evaluation | Phase 3: context-driven + Critic loop |
 
 ---
 
@@ -396,13 +403,10 @@ ollama pull llama3.2
 # 4. Run database migrations (run once against your PostgreSQL)
 psql $DATABASE_URL -f database/migrations/001_create_companies.sql
 psql $DATABASE_URL -f database/migrations/002_create_contacts.sql
-# ... run all migrations in order 001–013
+# ... run all migrations in order 001–016
 
 # 5. Build and start containers
-docker build -f api/Dockerfile -t utility-lead-api .
-docker build -f dashboard/Dockerfile -t utility-lead-frontend .
-docker run -d -p 8001:8001 --name lead-api --env-file .env utility-lead-api
-docker run -d -p 3000:3000 --name lead-frontend utility-lead-frontend
+docker-compose up --build
 ```
 
 ### Or using docker-compose
@@ -434,16 +438,16 @@ saves companies to the database, and shows them as cards in the chat.
 
 ```bash
 # View API logs (see tool calls, errors)
-docker logs lead-api -f
+docker-compose logs api -f
 
-# Restart API after code changes
-docker build -f api/Dockerfile -t utility-lead-api . && docker restart lead-api
+# Rebuild and restart API after code changes
+docker-compose build api && docker-compose up -d api
 
-# Rebuild frontend after UI changes
-docker build -f dashboard/Dockerfile -t utility-lead-frontend . && docker restart lead-frontend
+# Rebuild and restart frontend after UI changes
+docker-compose build frontend && docker-compose up -d frontend
 
 # Stop everything
-docker stop lead-api lead-frontend
+docker-compose down
 ```
 
 ---
@@ -462,7 +466,7 @@ All config is read from `.env`. Copy `.env.example` to `.env` and fill in values
 | `OLLAMA_BASE_URL` | Ollama server URL (Docker uses host.docker.internal) | `http://host.docker.internal:11434` |
 | `TAVILY_API_KEY` | Tavily search API key | `tvly-...` |
 | `SCRAPERAPI_KEY` | ScraperAPI key for directory scraping | `abc123...` |
-| `HUNTER_API_KEY` | Hunter.io contact enrichment key | `abc123...` |
+| `HUNTER_API_KEY` | Hunter.io — domain email search (50/month) | `abc123...` |
 | `SENDGRID_API_KEY` | SendGrid email delivery key | `SG.xxx` |
 | `SENDGRID_FROM_EMAIL` | Verified sender email address | `team@company.com` |
 | `ALERT_EMAIL` | Email address for all notifications (no Slack) | `sales@company.com` |
@@ -475,8 +479,14 @@ All config is read from `.env`. Copy `.env.example` to `.env` and fill in values
 | Variable | Description | Default |
 |---|---|---|
 | `OPENAI_API_KEY` | Required only if `LLM_PROVIDER=openai` | blank |
-| `GOOGLE_MAPS_API_KEY` | Google Places API — disable by leaving blank | blank |
-| `YELP_API_KEY` | Yelp Business API — disable by leaving blank | blank |
+| `GOOGLE_MAPS_API_KEY` | Google Places — company discovery + phone lookup | blank |
+| `YELP_API_KEY` | Yelp Business — company discovery + phone fallback | blank |
+| `SERPER_API_KEY` | Serper.dev — Google search for email discovery (2,500/month) | blank |
+| `SERPAPI_API_KEY` | SerpAPI — Google search fallback (100/month) | blank |
+| `PROSPEO_API_KEY` | Prospeo.io — LinkedIn contact search+enrich (100 credits/month) | blank |
+| `ZEROBOUNCE_API_KEY` | ZeroBounce — email verification (100/month) | blank |
+| `SNOV_CLIENT_ID` | Snov.io client ID (domain email search — requires paid plan) | blank |
+| `SNOV_CLIENT_SECRET` | Snov.io client secret | blank |
 | `HIGH_SCORE_THRESHOLD` | Minimum score for "high" tier leads | `70` |
 | `MEDIUM_SCORE_THRESHOLD` | Minimum score for "medium" tier leads | `40` |
 | `EMAIL_DAILY_LIMIT` | Max emails sent per day | `50` |
@@ -491,8 +501,9 @@ All config is read from `.env`. Copy `.env.example` to `.env` and fill in values
 |---|---|---|
 | **Chat Agent** | `/chat` | Conversational interface — primary way to use the platform |
 | **Scout Live** | `/scout` | Trigger a company search and watch cards appear in real time |
-| **Leads** | `/leads` | All companies with filters (tier, industry, status, score) |
-| **Email Review** | `/emails` | Pending email drafts — approve / edit / reject before sending |
+| **Leads** | `/leads` | All companies with filters (tier, industry, status, score) — approve/reject leads |
+| **Email Review** | `/emails` | Pending email drafts — approve / edit+approve / reject / regenerate |
+| **Triggers** | `/triggers` | Manual pipeline controls: Scout, Analyst, Enrich, Writer, Verify, Backfill phones |
 | **Pipeline** | `/pipeline` | Agent health, stage counts, recent activity feed |
 | **Reports** | `/reports` | Weekly summary, top leads chart, pipeline value |
 

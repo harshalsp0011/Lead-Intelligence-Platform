@@ -28,9 +28,15 @@ class LeadResponse(BaseModel):
     company_name: str
     industry: str
     state: str
+    city: Optional[str] = None
+    phone: Optional[str] = None
+    website: Optional[str] = None
+    linkedin_search_url: Optional[str] = None
     site_count: int
     employee_count: int
     estimated_total_spend: float
+    estimated_annual_utility_spend: float = 0.0
+    estimated_annual_telecom_spend: float = 0.0
     savings_low: float
     savings_mid: float
     savings_high: float
@@ -41,6 +47,9 @@ class LeadResponse(BaseModel):
     score: float
     tier: str
     score_reason: str
+    industry_fit_score: float = 0.0
+    data_quality_score: float = 0.0
+    multi_site_confirmed: bool = False
     approved_human: bool
     approved_by: Optional[str] = None
     approved_at: Optional[datetime] = None
@@ -74,6 +83,7 @@ class LeadListResponse(BaseModel):
     high_count: int
     medium_count: int
     low_count: int
+    pending_analysis_count: int = 0  # companies with status='new' — not yet scored
     page: int
     page_size: int
 
@@ -89,5 +99,6 @@ class LeadFilterParams(BaseModel):
     max_score: Optional[float] = None
     date_from: Optional[date] = None
     date_to: Optional[date] = None
+    search: Optional[str] = None
     page: int = 1
     page_size: int = 25

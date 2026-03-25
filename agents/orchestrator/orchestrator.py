@@ -33,7 +33,7 @@ from agents.analyst import enrichment_client
 from agents.notifications import email_notifier
 from agents.orchestrator import task_manager
 from config.settings import get_settings
-from database.orm_models import Company, CompanyFeature, EmailDraft, HumanApprovalRequest, LeadScore
+from database.orm_models import AgentRun, Company, CompanyFeature, Contact, EmailDraft, HumanApprovalRequest, LeadScore
 
 logger = logging.getLogger(__name__)
 
@@ -221,11 +221,15 @@ def run_analyst(
 def run_contact_enrichment(
     company_ids: list[str],
     db_session: Session,
+    on_progress: Any = None,
 ) -> dict[str, Any]:
     """Find and persist contacts for each high-tier company.
 
     Queries the companies table for name + website, then calls
     enrichment_client.find_contacts() per company.
+
+    on_progress(entry) is called after each company with a dict:
+      { idx, name, status, provider, contacts_found, has_phone }
 
     Returns dict with key `contacts_found` (int).
     """
@@ -238,63 +242,223 @@ def run_contact_enrichment(
     ).scalars().all()
 
     total_contacts = 0
-    for company in companies:
+    for idx, company in enumerate(companies, start=1):
         company_id = str(company.id)
         name = str(company.name or "")
         website = str(company.website or "")
+
+        # --- Phone lookup: Google Places → Yelp → website scraper ---
+        phone_scraped = False
+        if not company.phone:
+            city  = str(company.city  or "")
+            state = str(company.state or "")
+            phone = None
+            try:
+                phone = enrichment_client.lookup_phone_google_places(name, city, state)
+            except Exception:
+                pass
+            if not phone:
+                try:
+                    phone = enrichment_client.lookup_phone_yelp(name, city, state)
+                except Exception:
+                    pass
+            if not phone and website:
+                try:
+                    phone = enrichment_client.scrape_phone_from_website(website)
+                except Exception:
+                    pass
+            if phone:
+                company.phone = phone
+                db_session.add(company)
+                phone_scraped = True
+                logger.info("Phone found for %s: %s", name, phone)
+
+        contacts_found = 0
+        provider = None
+        status = "skipped"
         try:
             contacts = enrichment_client.find_contacts(
                 company_name=name,
                 website_domain=website,
                 db_session=db_session,
             )
-            total_contacts += len(contacts)
+            if contacts:
+                contacts_found = len(contacts)
+                total_contacts += contacts_found
+                provider = contacts[0].get("source") if contacts else None
+                company.contact_found = True
+                company.status = "enriched"
+                db_session.add(company)
+                status = "found"
+
+                # Auto-approve: contact found means company is ready for outreach
+                from database.orm_models import LeadScore as _LeadScore  # noqa: PLC0415
+                from datetime import datetime, timezone as _tz  # noqa: PLC0415
+                score_row = db_session.execute(
+                    select(_LeadScore)
+                    .where(_LeadScore.company_id == company.id)
+                    .order_by(_LeadScore.scored_at.desc())
+                ).scalar_one_or_none()
+                if score_row and not score_row.approved_human:
+                    score_row.approved_human = True
+                    score_row.approved_by = "system (contact found)"
+                    score_row.approved_at = datetime.now(_tz.utc)
+                    db_session.add(score_row)
+            else:
+                status = "not_found"
         except Exception:
             logger.exception(
                 "Contact enrichment failed for company_id=%s", company_id
             )
+            status = "failed"
 
+        if on_progress:
+            on_progress({
+                "idx": idx,
+                "name": name,
+                "status": status,
+                "provider": provider,
+                "contacts_found": contacts_found,
+                "has_phone": bool(company.phone),
+            })
+
+    db_session.commit()
     logger.info("Contact enrichment complete. Total contacts found: %d", total_contacts)
     return {"contacts_found": total_contacts}
 
 
-def run_writer(db_session: Session) -> dict[str, Any]:
-    """Generate email drafts for approved high-tier companies with no draft yet.
+def run_writer(db_session: Session, on_progress: Any = None) -> dict[str, Any]:
+    """Generate email drafts for all human-approved companies with no draft yet.
 
-    Returns dict with key `drafts_created` (int).
+    Uses company.status == "approved" as the gate — this is set by the Leads page
+    approval button, the direct-approval API, or the orchestrator auto-approve.
+    Tier is not filtered here: if a human approved the company, they want a draft.
+
+    Creates an AgentRun row for run tracking:
+      - Sets current_stage = "writer_running" at start
+      - Sets status = "writer_awaiting_approval" when drafts are ready
+
+    Returns dict with keys `drafts_created` (int) and `run_id` (str).
     """
     rows = db_session.execute(
-        select(LeadScore.company_id)
+        select(Company.id)
         .where(
-            LeadScore.tier == "high",
-            LeadScore.approved_human.is_(True),
+            Company.status == "approved",
             ~select(EmailDraft.id)
-            .where(EmailDraft.company_id == LeadScore.company_id)
-            .correlate(LeadScore)
+            .where(EmailDraft.company_id == Company.id)
+            .correlate(Company)
             .exists(),
         )
-        .order_by(LeadScore.scored_at.desc())
+        .order_by(Company.updated_at.desc())
     ).all()
 
     approved_ids: list[str] = [str(company_id) for (company_id,) in rows if company_id]
     if not approved_ids:
-        return {"drafts_created": 0}
+        return {"drafts_created": 0, "run_id": None}
+
+    # Create AgentRun row for run tracking
+    agent_run = AgentRun(
+        id=uuid.uuid4(),
+        trigger_source="writer_trigger",
+        status="writer_running",
+        current_stage="writer_running",
+        companies_approved=len(approved_ids),
+        drafts_created=0,
+        started_at=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+    )
+    db_session.add(agent_run)
+    db_session.flush()
+    run_id = str(agent_run.id)
+    logger.info("Writer run started. run_id=%s companies=%d", run_id, len(approved_ids))
 
     task = task_manager.assign_task(
         "writer",
-        {"company_ids": approved_ids},
+        {"company_ids": approved_ids, "run_id": run_id, "on_progress": on_progress},
         db_session,
     )
 
     if task["status"] != "completed":
+        agent_run.status = "failed"
+        agent_run.current_stage = "writer_failed"
+        agent_run.completed_at = datetime.now(timezone.utc)
+        db_session.commit()
         logger.error(
             "Writer task failed: %s", task["result"].get("error", "unknown error")
         )
-        return {"drafts_created": 0}
+        return {"drafts_created": 0, "run_id": run_id}
 
     drafts: list[str] = task["result"].get("draft_ids", [])
-    logger.info("Writer created %d drafts.", len(drafts))
-    return {"drafts_created": len(drafts)}
+
+    # Mark run as awaiting human approval
+    agent_run.status = "writer_awaiting_approval"
+    agent_run.current_stage = "writer_complete"
+    agent_run.drafts_created = len(drafts)
+    agent_run.completed_at = datetime.now(timezone.utc)
+    db_session.commit()
+
+    logger.info("Writer created %d drafts. run_id=%s", len(drafts), run_id)
+
+    # --- Send approval notification email ---
+    settings = get_settings()
+    if drafts and settings.ALERT_EMAIL:
+        # Load draft details for the notification (company, contact, subject, angle)
+        draft_summaries = _load_draft_summaries(drafts, db_session)
+
+        approval_req = HumanApprovalRequest(
+            id=uuid.uuid4(),
+            run_id=agent_run.id,
+            approval_type="emails",
+            status="pending",
+            items_count=len(drafts),
+            items_summary=f"{len(drafts)} email drafts ready for review",
+            notification_email=settings.ALERT_EMAIL,
+            notification_sent=False,
+            created_at=datetime.now(timezone.utc),
+        )
+        db_session.add(approval_req)
+        db_session.commit()
+
+        sent = email_notifier.send_draft_approval_request(
+            drafts=draft_summaries,
+            run_id=run_id,
+            recipient_email=settings.ALERT_EMAIL,
+        )
+        if sent:
+            approval_req.notification_sent = True
+            approval_req.notification_sent_at = datetime.now(timezone.utc)
+            db_session.commit()
+
+    return {"drafts_created": len(drafts), "run_id": run_id}
+
+
+def _load_draft_summaries(
+    draft_ids: list[str],
+    db_session: Session,
+) -> list[dict]:
+    """Load company/contact/subject info for draft notification email."""
+    summaries = []
+    for draft_id in draft_ids:
+        try:
+            draft_uuid = _parse_uuid(draft_id)
+            draft = db_session.get(EmailDraft, draft_uuid)
+            if not draft:
+                continue
+            company = db_session.get(Company, draft.company_id) if draft.company_id else None
+            contact = None
+            if draft.contact_id:
+                contact = db_session.get(Contact, draft.contact_id)
+            summaries.append({
+                "company_name":  str(company.name if company else "—"),
+                "contact_name":  str(contact.full_name if contact and contact.full_name else "—"),
+                "subject_line":  str(draft.subject_line or "—"),
+                "angle":         str(draft.template_used or "—"),
+                "critic_score":  draft.critic_score,
+                "low_confidence": bool(draft.low_confidence),
+            })
+        except Exception:
+            logger.warning("Could not load draft summary for draft_id=%s", draft_id)
+    return summaries
 
 
 def run_outreach(db_session: Session) -> dict[str, Any]:

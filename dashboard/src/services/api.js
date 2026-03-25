@@ -150,6 +150,10 @@ export async function approveLead(companyId, approvedBy) {
  * @param {string} reason - Rejection reason
  * @returns {Promise<object>} - Success response
  */
+export async function enrichLead(companyId) {
+  return fetchAPI(`/leads/${companyId}/enrich`, { method: 'POST', body: JSON.stringify({}) });
+}
+
 export async function rejectLead(companyId, rejectedBy, reason) {
   return fetchAPI(`/leads/${companyId}/reject`, {
     method: 'PATCH',
@@ -314,6 +318,33 @@ export async function triggerScout(industry, location, count) {
       run_mode: 'scout_only',
     }),
   });
+}
+
+/**
+ * 17b. Trigger contact enrichment (Hunter/Apollo) for scored companies
+ * @returns {Promise<object>} - TriggerResponse
+ */
+export async function triggerEnrich() {
+  return fetchAPI('/trigger/enrich', {
+    method: 'POST',
+    body: JSON.stringify({ industry: '', location: '', count: 0, run_mode: 'enrich_only' }),
+  });
+}
+
+export async function triggerBackfillPhones() {
+  return fetchAPI('/trigger/backfill-phones', { method: 'POST' });
+}
+
+export async function triggerVerifyEmails() {
+  return fetchAPI('/trigger/verify-emails', { method: 'POST' });
+}
+
+export async function triggerAutoApprove() {
+  return fetchAPI('/trigger/auto-approve', { method: 'POST' });
+}
+
+export async function triggerAnalyst() {
+  return fetchAPI('/trigger/analyst', { method: 'POST' });
 }
 
 /**

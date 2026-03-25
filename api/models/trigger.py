@@ -97,9 +97,11 @@ class TriggerStatusResponse(BaseModel):
 
     trigger_id: UUID
     status: str
+    run_mode: Optional[str] = None
     started_at: datetime
     completed_at: Optional[datetime] = None
     duration_seconds: Optional[int] = None
     result_summary: Optional[Dict[str, Any]] = None
     error_message: Optional[str] = None
     progress: list[Dict[str, Any]] = Field(default_factory=list)
+    total: Optional[int] = None

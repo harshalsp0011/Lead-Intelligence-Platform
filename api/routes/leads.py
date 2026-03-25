@@ -52,6 +52,15 @@ STATUS_APPROVED = "approved"
 STATUS_ARCHIVED = "archived"
 
 
+def _build_linkedin_url(company_name: str | None) -> str | None:
+    """Return a LinkedIn company search URL for the given company name."""
+    if not company_name:
+        return None
+    import urllib.parse
+    slug = urllib.parse.quote_plus(company_name)
+    return f"https://www.linkedin.com/search/results/companies/?keywords={slug}"
+
+
 def _row_from_models(
     company: Company,
     feature: CompanyFeature | None,
@@ -64,12 +73,21 @@ def _row_from_models(
         "company_name": company.name,
         "industry": company.industry or "",
         "state": company.state or "",
+        "city": company.city or None,
+        "phone": company.phone or None,
+        "website": company.website or None,
+        "linkedin_search_url": _build_linkedin_url(company.name),
         "site_count": company.site_count or 0,
         "employee_count": company.employee_count or 0,
         "estimated_total_spend": getattr(feature, "estimated_total_spend", 0.0) or 0.0,
+        "estimated_annual_utility_spend": getattr(feature, "estimated_annual_utility_spend", 0.0) or 0.0,
+        "estimated_annual_telecom_spend": getattr(feature, "estimated_annual_telecom_spend", 0.0) or 0.0,
         "savings_low": getattr(feature, "savings_low", 0.0) or 0.0,
         "savings_mid": getattr(feature, "savings_mid", 0.0) or 0.0,
         "savings_high": getattr(feature, "savings_high", 0.0) or 0.0,
+        "industry_fit_score": getattr(feature, "industry_fit_score", 0.0) or 0.0,
+        "data_quality_score": getattr(feature, "data_quality_score", 0.0) or 0.0,
+        "multi_site_confirmed": bool(getattr(feature, "multi_site_confirmed", False) or False),
         "score": getattr(score, "score", 0.0) or 0.0,
         "tier": getattr(score, "tier", TIER_LOW) or TIER_LOW,
         "score_reason": getattr(score, "score_reason", "") or "",
@@ -105,9 +123,15 @@ def _build_lead_row(row: dict[str, Any], contingency_fee: float) -> LeadResponse
         company_name=str(row.get("company_name") or ""),
         industry=str(row.get("industry") or ""),
         state=str(row.get("state") or ""),
+        city=row.get("city") or None,
+        phone=row.get("phone") or None,
+        website=row.get("website") or None,
+        linkedin_search_url=row.get("linkedin_search_url") or None,
         site_count=int(row.get("site_count") or 0),
         employee_count=int(row.get("employee_count") or 0),
         estimated_total_spend=float(row.get("estimated_total_spend") or 0.0),
+        estimated_annual_utility_spend=float(row.get("estimated_annual_utility_spend") or 0.0),
+        estimated_annual_telecom_spend=float(row.get("estimated_annual_telecom_spend") or 0.0),
         savings_low=float(row.get("savings_low") or 0.0),
         savings_mid=savings_mid,
         savings_high=float(row.get("savings_high") or 0.0),
@@ -118,6 +142,9 @@ def _build_lead_row(row: dict[str, Any], contingency_fee: float) -> LeadResponse
         score=float(row.get("score") or 0.0),
         tier=str(row.get("tier") or TIER_LOW),
         score_reason=str(row.get("score_reason") or ""),
+        industry_fit_score=float(row.get("industry_fit_score") or 0.0),
+        data_quality_score=float(row.get("data_quality_score") or 0.0),
+        multi_site_confirmed=bool(row.get("multi_site_confirmed") or False),
         approved_human=bool(row.get("approved_human") or False),
         approved_by=row.get("approved_by"),
         approved_at=row.get("approved_at"),
@@ -171,6 +198,8 @@ def _query_leads(
         query = query.where(Company.state == filters.state)
     if filters.status:
         query = query.where(Company.status == filters.status)
+    if filters.search:
+        query = query.where(Company.name.ilike(f"%{filters.search}%"))
 
     companies = db.execute(query).scalars().all()
     if not companies:
@@ -254,11 +283,15 @@ def _query_leads(
     high = sum(1 for row in rows if row.get("tier") == TIER_HIGH)
     medium = sum(1 for row in rows if row.get("tier") == TIER_MEDIUM)
     low = sum(1 for row in rows if row.get("tier") not in {TIER_HIGH, TIER_MEDIUM})
+    # Companies that have not been through the analyst yet (no lead_score row)
+    pending_analysis = db.scalar(
+        select(func.count(Company.id)).where(Company.status == STATUS_NEW)
+    ) or 0
 
     page = max(1, filters.page)
     page_size = max(1, min(100, filters.page_size))
     offset = (page - 1) * page_size
-    return total, high, medium, low, rows[offset: offset + page_size]
+    return total, high, medium, low, pending_analysis, rows[offset: offset + page_size]
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +320,7 @@ def list_high_leads(
     settings = get_settings()
     fee = float(getattr(settings, "TB_CONTINGENCY_FEE", 0.24) or 0.24)
 
-    total, high, medium, low, rows = _query_leads(
+    total, high, medium, low, pending_analysis, rows = _query_leads(
         db, filters, forced_tier="high", order_by="score DESC"
     )
     leads = [_build_lead_row(r, fee) for r in rows]
@@ -297,6 +330,7 @@ def list_high_leads(
         high_count=high,
         medium_count=medium,
         low_count=low,
+        pending_analysis_count=pending_analysis,
         page=filters.page,
         page_size=filters.page_size,
     )
@@ -311,7 +345,7 @@ def list_leads(
     settings = get_settings()
     fee = float(getattr(settings, "TB_CONTINGENCY_FEE", 0.24) or 0.24)
 
-    total, high, medium, low, rows = _query_leads(
+    total, high, medium, low, pending_analysis, rows = _query_leads(
         db, filters, order_by="c.updated_at DESC"
     )
     leads = [_build_lead_row(r, fee) for r in rows]
@@ -321,6 +355,7 @@ def list_leads(
         high_count=high,
         medium_count=medium,
         low_count=low,
+        pending_analysis_count=pending_analysis,
         page=filters.page,
         page_size=filters.page_size,
     )
@@ -412,3 +447,44 @@ def reject_lead(
             f"Reason: {body.rejection_reason or 'not provided'}."
         ),
     }
+
+
+@router.post("/{company_id}/enrich")
+def enrich_lead(
+    company_id: UUID,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Run contact enrichment (Hunter/Apollo) for a single company.
+
+    Useful for manually-added companies or companies missed by the bulk enrichment step.
+    """
+    from agents.analyst import enrichment_client  # noqa: PLC0415
+
+    company = db.execute(
+        select(Company).where(Company.id == company_id)
+    ).scalar_one_or_none()
+
+    if not company:
+        raise HTTPException(status_code=404, detail=f"Company {company_id} not found.")
+
+    name = str(company.name or "")
+    website = str(company.website or "")
+
+    if not website:
+        return {"success": False, "contacts_found": 0, "message": "No website on file — cannot run enrichment."}
+
+    try:
+        contacts = enrichment_client.find_contacts(
+            company_name=name,
+            website_domain=website,
+            db_session=db,
+        )
+        logger.info("Manual enrichment for company_id=%s found %d contacts", company_id, len(contacts))
+        return {
+            "success": True,
+            "contacts_found": len(contacts),
+            "message": f"Found {len(contacts)} contact(s) for {name}.",
+        }
+    except Exception as exc:
+        logger.exception("Manual enrichment failed for company_id=%s", company_id)
+        raise HTTPException(status_code=500, detail=f"Enrichment failed: {exc}") from exc

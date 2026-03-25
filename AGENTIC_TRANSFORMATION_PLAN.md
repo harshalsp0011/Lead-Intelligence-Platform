@@ -1,5 +1,8 @@
 # Agentic Transformation Plan
 
+> **Note:** This was the original planning doc. For the current built state, see
+> `docs/AGENTIC_DESIGN.md`. Phases 0–3 and 2.6 are complete.
+
 ## 1. Vision
 
 Build an agentic lead-generation platform where agents **reason, decide, act, and evaluate**

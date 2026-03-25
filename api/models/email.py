@@ -27,7 +27,7 @@ class EmailDraftResponse(BaseModel):
     id: UUID
     company_id: UUID
     company_name: str
-    contact_id: UUID
+    contact_id: Optional[UUID] = None
     contact_name: str
     contact_title: str
     contact_email: str
@@ -40,6 +40,10 @@ class EmailDraftResponse(BaseModel):
     approved_by: Optional[str] = None
     approved_at: Optional[datetime] = None
     edited_human: bool
+    # Phase C: Writer + Critic loop fields
+    critic_score: Optional[float] = None
+    low_confidence: Optional[bool] = None
+    rewrite_count: Optional[int] = None
 
     model_config = {"from_attributes": True}
 

@@ -17,7 +17,7 @@
  *   <Leads />
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import LoadingOverlay from '../components/LoadingOverlay';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -78,7 +78,10 @@ function exportTableAsCSV(leads, filename = 'leads.csv') {
   const headers = [
     'Company Name',
     'Industry',
+    'City',
     'State',
+    'Phone',
+    'Website',
     'Sites',
     'Annual Spend',
     'Est. Savings',
@@ -91,11 +94,14 @@ function exportTableAsCSV(leads, filename = 'leads.csv') {
   const rows = leads.map((lead) => [
     lead.company_name || '',
     lead.industry || '',
+    lead.city || '',
     lead.state || '',
-    lead.estimated_sites || '',
-    lead.estimated_annual_spend || '',
-    lead.estimated_savings_range || '',
-    lead.lead_score || '',
+    lead.phone || '',
+    lead.website || '',
+    lead.site_count || '',
+    lead.estimated_total_spend || '',
+    lead.savings_mid_formatted || lead.savings_mid || '',
+    lead.score || '',
     lead.tier || '',
     lead.status || '',
     lead.contact_found ? 'Yes' : 'No',
@@ -139,9 +145,9 @@ function PageHeader({ onExport, hasData }) {
 }
 
 /**
- * FilterBar: Filter controls
+ * FilterBar: Filter controls — search first, auto-apply on change, × to clear search
  */
-function FilterBar({ filters, onFilterChange, onApply, onClear, isLoading, industries }) {
+function FilterBar({ filters, onFilterChange, industries }) {
 
   const tiers = [
     { value: '', label: 'All Tiers' },
@@ -161,23 +167,41 @@ function FilterBar({ filters, onFilterChange, onApply, onClear, isLoading, indus
     { value: 'lost', label: 'Lost' },
   ];
 
-  const handleInputChange = (e) => {
+  const handleChange = (e) => {
     const { name, value } = e.target;
-    onFilterChange({
-      ...filters,
-      [name]: name === 'min_score' ? parseInt(value, 10) || 0 : value,
-      page: 1, // Reset to page 1 on filter change
-    });
+    onFilterChange({ ...filters, [name]: value, page: 1 });
   };
 
   return (
     <div className="bg-white rounded-lg shadow p-4 mb-6">
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-3">
-        {/* Industry — dynamic from DB */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+
+        {/* Search by company name — first */}
+        <div className="relative">
+          <input
+            type="text"
+            name="search"
+            value={filters.search || ''}
+            onChange={handleChange}
+            placeholder="Search company name…"
+            className="w-full pl-3 pr-8 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+          />
+          {filters.search && (
+            <button
+              onClick={() => onFilterChange({ ...filters, search: '', page: 1 })}
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded-full bg-red-500 text-white text-xs font-bold hover:bg-red-600"
+              title="Clear search"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+
+        {/* Industry */}
         <select
           name="industry"
           value={filters.industry || ''}
-          onChange={handleInputChange}
+          onChange={handleChange}
           className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
         >
           <option value="">All Industries</option>
@@ -193,7 +217,7 @@ function FilterBar({ filters, onFilterChange, onApply, onClear, isLoading, indus
           type="text"
           name="state"
           value={filters.state || ''}
-          onChange={handleInputChange}
+          onChange={handleChange}
           placeholder="State"
           className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
         />
@@ -202,13 +226,11 @@ function FilterBar({ filters, onFilterChange, onApply, onClear, isLoading, indus
         <select
           name="tier"
           value={filters.tier || ''}
-          onChange={handleInputChange}
+          onChange={handleChange}
           className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
         >
           {tiers.map((t) => (
-            <option key={t.value} value={t.value}>
-              {t.label}
-            </option>
+            <option key={t.value} value={t.value}>{t.label}</option>
           ))}
         </select>
 
@@ -216,54 +238,37 @@ function FilterBar({ filters, onFilterChange, onApply, onClear, isLoading, indus
         <select
           name="status"
           value={filters.status || ''}
-          onChange={handleInputChange}
+          onChange={handleChange}
           className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
         >
           {statuses.map((s) => (
-            <option key={s.value} value={s.value}>
-              {s.label}
-            </option>
+            <option key={s.value} value={s.value}>{s.label}</option>
           ))}
         </select>
 
-        {/* Min Score */}
-        <input
-          type="number"
-          name="min_score"
-          min="0"
-          max="100"
-          value={filters.min_score || 0}
-          onChange={handleInputChange}
-          placeholder="Min Score"
-          className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-        />
-
-        {/* Search */}
-        <input
-          type="text"
-          name="search"
-          value={filters.search || ''}
-          onChange={handleInputChange}
-          placeholder="Search by name"
-          className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-        />
       </div>
+    </div>
+  );
+}
 
-      <div className="flex gap-2">
-        <button
-          onClick={onApply}
-          disabled={isLoading}
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 transition text-sm font-semibold"
-        >
-          Apply Filters
-        </button>
-        <button
-          onClick={onClear}
-          className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition text-sm font-semibold"
-        >
-          Clear Filters
-        </button>
+/**
+ * PendingAnalysisBanner: Warning when companies haven't been scored yet
+ */
+function PendingAnalysisBanner({ pendingCount }) {
+  if (!pendingCount || pendingCount === 0) return null;
+  return (
+    <div className="bg-amber-50 border border-amber-300 rounded-lg p-4 mb-4 flex items-center justify-between">
+      <div>
+        <p className="font-semibold text-amber-900">
+          ⏳ {pendingCount} {pendingCount === 1 ? 'company has' : 'companies have'} not been analyzed yet
+        </p>
+        <p className="text-sm text-amber-700 mt-0.5">
+          These show as "low" tier by default — their real score is unknown. Run the Analyst to score them.
+        </p>
       </div>
+      <span className="text-xs text-amber-600 font-semibold ml-4 whitespace-nowrap">
+        Triggers → Run Analyst
+      </span>
     </div>
   );
 }
@@ -271,7 +276,7 @@ function FilterBar({ filters, onFilterChange, onApply, onClear, isLoading, indus
 /**
  * LeadCountSummary: Shows statistics
  */
-function LeadCountSummary({ totalCount, highCount, mediumCount, lowCount, displayingCount }) {
+function LeadCountSummary({ totalCount, highCount, mediumCount, lowCount, displayingCount, pendingCount }) {
   return (
     <div className="bg-white rounded-lg shadow p-4 mb-4">
       <p className="text-sm text-gray-700">
@@ -279,6 +284,9 @@ function LeadCountSummary({ totalCount, highCount, mediumCount, lowCount, displa
         {' '}• High: <span className="font-semibold text-green-600">{highCount}</span>
         {' '}| Medium: <span className="font-semibold text-yellow-600">{mediumCount}</span>
         {' '}| Low: <span className="font-semibold text-gray-600">{lowCount}</span>
+        {pendingCount > 0 && (
+          <span>{' '}| Pending analysis: <span className="font-semibold text-amber-600">{pendingCount}</span></span>
+        )}
       </p>
     </div>
   );
@@ -353,6 +361,7 @@ function LeadsTable({
               </th>
               <th className="px-4 py-3 text-left font-semibold text-gray-700 text-sm">Industry</th>
               <th className="px-4 py-3 text-left font-semibold text-gray-700 text-sm">State</th>
+              <th className="px-4 py-3 text-left font-semibold text-gray-700 text-sm">Phone</th>
               <th className="px-4 py-3 text-left font-semibold text-gray-700 text-sm">Sites</th>
               <th className="px-4 py-3 text-left font-semibold text-gray-700 text-sm">Annual Spend</th>
               <th className="px-4 py-3 text-left font-semibold text-gray-700 text-sm">Est. Savings</th>
@@ -383,32 +392,47 @@ function LeadsTable({
                 </td>
                 <td className="px-4 py-3 text-sm text-gray-700">{lead.industry || '—'}</td>
                 <td className="px-4 py-3 text-sm text-gray-700">{lead.state || '—'}</td>
+                <td className="px-4 py-3 text-sm text-gray-700">
+                  {lead.phone
+                    ? <a href={`tel:${lead.phone}`} className="text-blue-600 hover:underline whitespace-nowrap">{lead.phone}</a>
+                    : '—'}
+                </td>
                 <td className="px-4 py-3 text-sm text-gray-700">{lead.site_count || '—'}</td>
                 <td className="px-4 py-3 text-sm text-gray-700">
-                  {lead.savings_mid_formatted || formatCurrency(lead.estimated_total_spend)}
+                  {formatCurrency(lead.estimated_total_spend)}
                 </td>
                 <td className="px-4 py-3 text-sm text-gray-700">
-                  {lead.savings_mid_formatted || formatCurrency(lead.savings_mid)}
+                  {lead.savings_mid > 0
+                    ? (lead.savings_mid_formatted || formatCurrency(lead.savings_mid))
+                    : '—'}
                 </td>
                 <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold">{lead.score || '—'}</span>
-                    {lead.score && (
+                  {lead.status === 'new' || !lead.score ? (
+                    <span className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-700">
+                      pending
+                    </span>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold">{lead.score}</span>
                       <div className="w-16 bg-gray-200 rounded-full h-2">
                         <div
                           className="bg-blue-600 h-2 rounded-full"
                           style={{ width: `${lead.score}%` }}
                         />
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </td>
                 <td className="px-4 py-3">
-                  <span
-                    className={`px-2 py-1 rounded text-xs font-semibold ${getTierColor(lead.tier)}`}
-                  >
-                    {lead.tier || '—'}
-                  </span>
+                  {lead.status === 'new' || !lead.score ? (
+                    <span className="px-2 py-1 rounded text-xs font-semibold bg-amber-100 text-amber-700">
+                      not scored
+                    </span>
+                  ) : (
+                    <span className={`px-2 py-1 rounded text-xs font-semibold ${getTierColor(lead.tier)}`}>
+                      {lead.tier || '—'}
+                    </span>
+                  )}
                 </td>
                 <td className="px-4 py-3">
                   <span
@@ -427,10 +451,10 @@ function LeadsTable({
                   >
                     View
                   </button>
-                  {lead.tier === 'high' && lead.status !== 'approved' && (
+                  {!lead.approved_human && lead.status !== 'approved' && lead.score > 0 && (
                     <button
                       onClick={() => onApproveLead(lead.company_id)}
-                      className="text-green-600 hover:underline"
+                      className="text-green-600 hover:underline font-semibold"
                     >
                       Approve
                     </button>
@@ -521,12 +545,13 @@ export default function Leads() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  const searchTimerRef = useRef(null);
+
   const [filters, setFilters] = useState({
     industry: searchParams.get('industry') || '',
     state: searchParams.get('state') || '',
     tier: searchParams.get('tier') || '',
     status: searchParams.get('status') || '',
-    min_score: parseInt(searchParams.get('min_score'), 10) || 0,
     search: searchParams.get('search') || '',
     page: 1,
     page_size: 25,
@@ -542,6 +567,7 @@ export default function Leads() {
     high_count: 0,
     medium_count: 0,
     low_count: 0,
+    pending_analysis_count: 0,
   });
 
   const [sortField, setSortField] = useState('company_name');
@@ -566,6 +592,7 @@ export default function Leads() {
         high_count: response.high_count || 0,
         medium_count: response.medium_count || 0,
         low_count: response.low_count || 0,
+        pending_analysis_count: response.pending_analysis_count || 0,
       });
     } catch (err) {
       console.error('Failed to load leads:', err);
@@ -584,35 +611,18 @@ export default function Leads() {
   }, []);
 
   /**
-   * Handle filter changes
+   * Handle filter changes — auto-apply immediately for dropdowns,
+   * debounce 400ms for search text to avoid API call on every keystroke
    */
   const handleFilterChange = (newFilters) => {
     setFilters(newFilters);
-  };
-
-  /**
-   * Apply filters
-   */
-  const handleApplyFilters = () => {
-    loadLeads(filters);
-  };
-
-  /**
-   * Clear filters
-   */
-  const handleClearFilters = () => {
-    const cleared = {
-      industry: '',
-      state: '',
-      tier: '',
-      status: '',
-      min_score: 0,
-      search: '',
-      page: 1,
-      page_size: 25,
-    };
-    setFilters(cleared);
-    loadLeads(cleared);
+    const isSearchChange = newFilters.search !== filters.search;
+    if (isSearchChange) {
+      clearTimeout(searchTimerRef.current);
+      searchTimerRef.current = setTimeout(() => loadLeads(newFilters), 400);
+    } else {
+      loadLeads(newFilters);
+    }
   };
 
   /**
@@ -666,7 +676,7 @@ export default function Leads() {
     try {
       await Promise.all(
         highLeads.map((lead) =>
-          approveLead(lead.id, 'bulk_approval_user')
+          approveLead(lead.company_id, 'bulk_approval_user')
         )
       );
       setSelectedLeads([]);
@@ -744,11 +754,11 @@ export default function Leads() {
         <FilterBar
           filters={filters}
           onFilterChange={handleFilterChange}
-          onApply={handleApplyFilters}
-          onClear={handleClearFilters}
-          isLoading={isLoading}
           industries={industries}
         />
+
+        {/* Pending Analysis Banner */}
+        <PendingAnalysisBanner pendingCount={summary.pending_analysis_count} />
 
         {/* Lead Count Summary */}
         {!isLoading && leads.length > 0 && (
@@ -757,6 +767,7 @@ export default function Leads() {
             highCount={summary.high_count}
             mediumCount={summary.medium_count}
             lowCount={summary.low_count}
+            pendingCount={summary.pending_analysis_count}
             displayingCount={leads.length}
           />
         )}

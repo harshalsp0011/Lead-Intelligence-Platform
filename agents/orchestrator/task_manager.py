@@ -206,6 +206,8 @@ def _dispatch(
         result = writer_agent.run(
             company_ids=list(params.get("company_ids", [])),
             db_session=db_session,
+            run_id=params.get("run_id"),
+            on_progress=params.get("on_progress"),
         )
         return {"draft_ids": result or []}
 

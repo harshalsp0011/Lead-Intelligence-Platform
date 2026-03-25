@@ -186,6 +186,7 @@ class Company(Base):
     state: Mapped[str | None] = mapped_column(String(50), nullable=True)
     employee_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     site_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
     source: Mapped[str | None] = mapped_column(String(200), nullable=True)
     source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     date_found: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -311,6 +312,9 @@ class EmailDraft(Base):
     approved_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     edited_human: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    critic_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    low_confidence: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    rewrite_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
 
 
 class OutreachEvent(Base):

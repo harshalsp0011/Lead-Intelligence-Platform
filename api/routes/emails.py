@@ -76,6 +76,9 @@ def _draft_to_response(
         approved_by=draft.approved_by,
         approved_at=draft.approved_at,
         edited_human=bool(draft.edited_human),
+        critic_score=draft.critic_score,
+        low_confidence=draft.low_confidence,
+        rewrite_count=draft.rewrite_count,
     )
 
 
@@ -189,7 +192,19 @@ def approve_draft(
     body: EmailApproveRequest,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Mark a draft as approved for outreach sending."""
+    """Approve a draft and send the email immediately via the configured provider.
+
+    Agentic concept: Human-in-the-Loop gate — human reviews and approves the
+    AI-written draft before any email is sent. Approval triggers the actual send.
+
+    Flow:
+    1. Mark draft approved_human=True
+    2. Call email_sender.send_email → sends via SendGrid/Instantly, logs outreach_event
+    3. On success: set company.status = "contacted"
+    4. Return {success, sent, message_id, message}
+    """
+    from agents.outreach.email_sender import send_email  # noqa: PLC0415
+
     draft = db.get(EmailDraft, draft_id)
     if draft is None:
         logger.warning("Draft %s could not be approved because it does not exist", draft_id)
@@ -198,10 +213,39 @@ def approve_draft(
     draft.approved_human = True
     draft.approved_by = body.approved_by
     draft.approved_at = datetime.now(timezone.utc)
+    db.flush()  # persist approval before send attempt
+
+    # --- Send the email ---
+    send_result = send_email(draft_id=str(draft_id), db_session=db)
+    sent = bool(send_result.get("success"))
+    message_id = str(send_result.get("message_id") or "")
+
+    if sent:
+        # Update company status to "contacted"
+        company = db.get(Company, draft.company_id)
+        if company is not None:
+            company.status = "contacted"
+            company.updated_at = datetime.now(timezone.utc)
+        logger.info(
+            "Draft %s approved and sent by %s — message_id=%s",
+            draft_id, body.approved_by, message_id,
+        )
+    else:
+        logger.warning(
+            "Draft %s approved by %s but send failed: %s",
+            draft_id, body.approved_by, message_id,
+        )
 
     db.commit()
-    logger.info("Draft %s approved by %s", draft_id, body.approved_by)
-    return {"success": True, "message": f"Draft {draft_id} approved by {body.approved_by}."}
+    return {
+        "success": True,
+        "sent": sent,
+        "message_id": message_id,
+        "message": (
+            f"Draft {draft_id} approved and sent." if sent
+            else f"Draft {draft_id} approved but not sent: {message_id}"
+        ),
+    }
 
 
 @router.patch("/{draft_id}/edit")
@@ -234,20 +278,27 @@ def reject_draft(
     body: EmailRejectRequest,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Delete a draft and log the rejection reason."""
+    """Delete a draft and reset the company back to 'approved' so it re-appears
+    in the Writer queue and the Generate Drafts button count on the Triggers page."""
     draft = db.get(EmailDraft, draft_id)
     if draft is None:
         logger.warning("Draft %s could not be rejected because it does not exist", draft_id)
         raise HTTPException(status_code=404, detail=f"Draft {draft_id} not found.")
 
+    company_id = draft.company_id
     db.delete(draft)
+
+    # Reset company status so it re-appears in the pending Writer count
+    company = db.get(Company, company_id) if company_id else None
+    if company is not None and company.status == "draft_created":
+        company.status = "approved"
+        company.updated_at = datetime.now(timezone.utc)
+
     db.commit()
 
     logger.info(
-        "Draft %s rejected by %s. reason=%s",
-        draft_id,
-        body.rejected_by,
-        body.rejection_reason,
+        "Draft %s rejected by %s (reason=%s) — company %s reset to 'approved'",
+        draft_id, body.rejected_by, body.rejection_reason, company_id,
     )
     return {
         "success": True,
@@ -274,6 +325,10 @@ def regenerate_draft(
     company_id = str(existing.company_id)
 
     db.delete(existing)
+    # Briefly reset status so the company is re-eligible if regeneration fails
+    company = db.get(Company, existing.company_id) if existing.company_id else None
+    if company is not None and company.status == "draft_created":
+        company.status = "approved"
     db.commit()
 
     new_draft_id = writer_agent.process_one_company(company_id=company_id, db_session=db)

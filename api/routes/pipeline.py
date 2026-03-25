@@ -23,7 +23,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.dependencies import get_db, verify_api_key
@@ -34,7 +34,7 @@ from api.models.pipeline import (
     RecentActivityResponse,
 )
 from agents.orchestrator import pipeline_monitor
-from database.orm_models import AgentRun, AgentRunLog
+from database.orm_models import AgentRun, AgentRunLog, Company, Contact, EmailDraft
 
 router = APIRouter(dependencies=[Depends(verify_api_key)])
 
@@ -61,6 +61,37 @@ def pipeline_status(db: Session = Depends(get_db)) -> PipelineStatusResponse:
 
     mid = float(value.get("total_savings_mid") or 0.0)
 
+    # Company IDs that already have at least one saved contact
+    company_ids_with_contact = select(func.distinct(Contact.company_id)).scalar_subquery()
+
+    contacts_with: int = db.execute(
+        select(func.count(func.distinct(Contact.company_id)))
+    ).scalar() or 0
+
+    # Scored/approved companies with no contact rows yet — need enrichment
+    contacts_needed: int = db.execute(
+        select(func.count(Company.id))
+        .where(
+            Company.status.in_(["scored", "approved"]),
+            Company.id.not_in(company_ids_with_contact),
+        )
+    ).scalar() or 0
+
+    # Companies waiting for Analyst scoring
+    pending_analyst: int = counts.get("new", 0) + counts.get("enriched", 0)
+
+    # Approved companies with no draft yet — the real writer queue
+    pending_writer: int = db.execute(
+        select(func.count(Company.id))
+        .where(
+            Company.status == "approved",
+            ~select(EmailDraft.id)
+            .where(EmailDraft.company_id == Company.id)
+            .correlate(Company)
+            .exists(),
+        )
+    ).scalar() or 0
+
     return PipelineStatusResponse(
         new=counts.get("new", 0),
         enriched=counts.get("enriched", 0),
@@ -77,6 +108,10 @@ def pipeline_status(db: Session = Depends(get_db)) -> PipelineStatusResponse:
         pipeline_value_mid=mid,
         pipeline_value_formatted=_fmt_currency(mid),
         last_updated=datetime.now(timezone.utc),
+        contacts_with=contacts_with,
+        contacts_needed=contacts_needed,
+        pending_analyst=pending_analyst,
+        pending_writer=pending_writer,
     )
 
 

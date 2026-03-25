@@ -23,15 +23,23 @@ def call_ollama(prompt: str) -> str:
         raise RuntimeError("Ollama client library is not installed") from exc
 
     try:
-        response: dict[str, Any] = ollama.chat(
+        client = ollama.Client(host=settings.OLLAMA_BASE_URL)
+        response = client.chat(
             model=settings.LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
         )
     except Exception as exc:
-        raise RuntimeError("Ollama not running. Start with: ollama serve") from exc
+        raise RuntimeError(
+            f"Ollama not reachable at {settings.OLLAMA_BASE_URL}. "
+            "Start with: ollama serve"
+        ) from exc
 
-    message = response.get("message") if isinstance(response, dict) else None
-    content = message.get("content") if isinstance(message, dict) else None
+    # ollama >= 0.4 returns ChatResponse object; older versions returned dict
+    if isinstance(response, dict):
+        message = response.get("message") or {}
+        content = message.get("content") if isinstance(message, dict) else None
+    else:
+        content = response.message.content if hasattr(response, "message") else None
     return str(content or "")
 
 

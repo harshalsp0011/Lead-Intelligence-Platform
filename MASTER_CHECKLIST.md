@@ -654,6 +654,7 @@ Step 2 → Phase B: Scout agentic query planning           ✅ DONE (2026-03-22)
 Step 3 → Phase C: Writer + Critic loop                   🔄 IN PROGRESS (2026-03-22)
          (context-driven generation + quality evaluation + rewrite loop)
          Reference: docs/PHASE_C_WRITER_CRITIC.md
+         Remaining: 3C win-rate learning, 3C run tracking, 3D approval email, 3D Approve All
 
 Step 4 → Phase D: Chat dynamic filters                   🔲 PLANNED
          (already mostly done — small enhancement)
@@ -661,55 +662,103 @@ Step 4 → Phase D: Chat dynamic filters                   🔲 PLANNED
 
 ---
 
+## Phase 2.6 — Contact Enrichment Hardening ✅ COMPLETE (2026-03-24)
+
+### Waterfall Reliability
+- [x] All 8 waterfall steps wrapped in `try/except` — one provider failing never crashes others
+- [x] `_hunter_blocked` flag — skips Hunter for rest of run after first 429
+- [x] `_apollo_blocked` flag — skips Apollo for rest of run after first 403
+- [x] Website scraper: pages reduced 7→4, timeout reduced 5s→3s (was causing 34-min runs)
+
+### Email Quality Gates
+- [x] `_PLACEHOLDER_LOCAL_PARTS` filter — rejects `firstname@`, `lastname@`, `flast@` etc.
+- [x] Domain integrity check — rejects emails with corrupted domains (`domain.com--skip-themes`)
+- [x] 14 placeholder + 3 corrupted emails deleted from DB
+
+### New Providers Added
+- [x] **Prospeo** (new March 2026 endpoints) — `POST /search-person` + `POST /enrich-person`; correct seniority enums; skips UNAVAILABLE; enriches top 2 per company; SMTP-verified results
+- [x] **Serper → SerpAPI fallback** — `_google_search()` helper, tries Serper first
+- [x] **ZeroBounce validate** — `verify_email_zerobounce()` returns `True`/`False`/`None`
+- [x] **ZeroBounce guessformat** — `find_via_zerobounce_domain()` detects email format + permutation
+- [x] **Generic inbox fallback** — step 8, saves `info@` as last resort
+
+### Credit Strategy
+- [x] Hunter 50/month → 100% for domain search (finding), never for verification
+- [x] ZeroBounce 100/month → 100% for verification only
+- [x] 8-pattern permutation switched from Hunter verifier to ZeroBounce
+- [x] `verify_email()` now returns `bool | None` — `None` = quota exhausted, contacts left unchanged
+
+### Approval Gate
+- [x] `trigger_enrich` now targets only `status="approved"` companies
+- [x] Orchestrator auto-approves company when enrichment finds a contact (`approved_human=True`)
+- [x] 35 companies with existing contacts manually backfilled to `approved`
+
+### Frontend
+- [x] `pollUntilDone` stops on `not_found` (container restart) — shows "Server restarted — run again"
+- [x] `EnrichActiveStatus` stops on `not_found`
+- [x] `TriggerStatusResponse` now includes `total` field — progress shows `26/59` not `26/?`
+- [x] Verify Emails result shows `⚠ No credits` message when both providers exhausted
+
+---
+
 ## Phase 3 — Agentic Writer + Critic Loop + Human-in-Loop (Email Review)
 Writer generates context-driven emails. Critic evaluates and triggers rewrites. Human reviews before Outreach sends.
 
 ### 3A — Agentic Writer: Context-Driven Generation (replaces template fill)
-- [ ] Writer reads: company name, industry, site_count, savings_mid, contact name, score_reason, state
-- [ ] LLM reasons about which angle to take (cost savings / audit process / risk reduction) based on company profile
-- [ ] LLM generates full email (subject + body) — not template substitution
-- [ ] `agents/writer/llm_connector.py` updated to pass full company context, not template slots
-- [ ] `agents/writer/writer_agent.py` updated to call context-driven generator
+- [x] Writer reads: company name, industry, site_count, savings_mid, contact name, score_reason, state
+- [x] LLM reasons about which angle to take (cost savings / audit process / risk reduction) based on company profile
+- [x] LLM generates full email (subject + body) — not template substitution
+- [x] `agents/writer/llm_connector.py` updated to pass full company context, not template slots
+- [x] `agents/writer/writer_agent.py` updated to call context-driven generator
 
 ### 3B — Critic Agent: Quality Evaluation Loop
-- [ ] Critic evaluates each draft on 0–10 rubric (separate LLM call):
-  - [ ] Personalized to this specific company (not generic)
-  - [ ] Mentions specific savings number
-  - [ ] Has clear CTA (call to action)
-  - [ ] Subject line specific (not "reduce your costs")
-  - [ ] Sounds human (not template-like)
-- [ ] Critic returns: `{ score, reason, rewrite_instruction }`
-- [ ] If score < 7: Writer rewrites using Critic instruction → re-evaluate
-- [ ] Max 2 rewrite loops per draft
-- [ ] If still < 7 after 2 rewrites: save with `low_confidence = true`
-- [ ] All rewrite attempts + scores logged to `agent_run_logs`
-- [ ] `agents/writer/critic_agent.py` — new file, Critic LLM call
+- [x] Critic evaluates each draft on 0–10 rubric (separate LLM call):
+  - [x] Personalized to this specific company (not generic)
+  - [x] Mentions specific savings number
+  - [x] Has clear CTA (call to action)
+  - [x] Subject line specific (not "reduce your costs")
+  - [x] Sounds human (not template-like)
+- [x] Critic returns: `{ score, reason, rewrite_instruction }`
+- [x] If score < 7: Writer rewrites using Critic instruction → re-evaluate
+- [x] Max 2 rewrite loops per draft
+- [x] If still < 7 after 2 rewrites: save with `low_confidence = true`
+- [x] All rewrite attempts + scores logged to `agent_run_logs`
+- [x] `agents/writer/critic_agent.py` — new file, Critic LLM call
 
-### 3C — Writer reads email_win_rate (learning layer)
-- [ ] Before generating, Writer queries `email_win_rate` for best-performing angle per industry
-- [ ] If no history: LLM picks angle freely
-- [ ] If history exists: LLM is told which angle has highest reply rate and reasons whether to use it
-- [ ] Template selection logged to `agent_run_logs`
+### 3C — Writer reads email_win_rate (learning layer) ✅ COMPLETE (2026-03-24)
+- [x] Before generating, Writer queries `email_win_rate` for best-performing angle per industry
+- [x] If no history (cold start): LLM picks angle freely
+- [x] If history exists (≥5 emails sent): LLM is told which angle has highest reply rate via `WIN RATE HINT` in prompt
+- [x] LLM outputs `ANGLE:` field — one of 5 named angles (cost_savings, audit_offer, risk_reduction, multi_site_savings, deregulation_opportunity)
+- [x] Angle saved as `template_used` in `email_drafts` — feeds `email_win_rate` when Tracker records reply events
+- [x] `get_best_angle(industry, db)` function in `writer_agent.py`
 
-### 3C — Writer connects to run tracking
-- [ ] Writer updates `agent_runs.current_stage` to `writer_running`
-- [ ] Writer updates `agent_runs.drafts_created` counter
-- [ ] Writer updates `agent_runs.status` to `writer_awaiting_approval` when done
+### 3C — Writer connects to run tracking ✅ COMPLETE (2026-03-24)
+- [x] `orchestrator.run_writer()` creates `AgentRun` row with `status="writer_running"`, `current_stage="writer_running"`
+- [x] `run_id` passed through `task_manager` → `writer_agent.run(run_id=...)`
+- [x] Writer increments `agent_runs.drafts_created` after each draft (live counter)
+- [x] Orchestrator sets `status="writer_awaiting_approval"`, `current_stage="writer_complete"` when done
 
-### 3D — Human Approval: Emails
-- [ ] After Writer finishes, system creates `human_approval_requests` row (`approval_type = 'emails'`)
-- [ ] Approval email sent: list of drafts with subject lines, link to email review page
-- [ ] `POST /approvals/emails` API route — marks selected drafts as approved
-- [ ] On approval: `agent_runs.status` = `writer_complete`, Outreach starts
-- [ ] `human_approval_requests` row updated on approval
+### 3D — Human Approval: Emails (SMTP Send on Approval)
+- [x] `api/routes/emails.py` `approve_draft` endpoint wires SMTP send on approval
+- [x] On approval: calls `email_sender.send_email()` → sets `company.status = "contacted"` → logs `outreach_event`
+- [x] Response includes `sent: bool` and `message_id` so UI knows if send succeeded
+- [x] After Writer finishes, `orchestrator.run_writer()` creates `human_approval_requests` row (`approval_type = "emails"`)
+- [x] Approval notification email sent: table of drafts (company, contact, subject, angle, AI score) + "Review & Approve Drafts →" button
+- [x] Email says "No emails have been sent yet" — reviewer knows nothing went out
+- [x] Reject behavior: draft deleted, company `approved_human` stays `True` → Regenerate button or re-run Writer picks it up
+- [ ] `human_approval_requests` row status updated when all drafts are acted on (deferred — requires batch tracking)
 
 ### 3E — UI: Email Review Page
-- [ ] Email review page shows all drafts for current run
-- [ ] Each draft shows: subject, body preview, company name, contact name
-- [ ] Inline edit for subject line and body
-- [ ] "Approve" / "Reject" per draft
+- [x] Email review page shows all drafts for current run
+- [x] Each draft shows: subject, body preview, company name, contact name
+- [x] Inline edit for subject line and body
+- [x] "Approve" / "Reject" per draft
+- [x] `CriticBadge` component — shows AI score (green ≥7, amber <7) with rewrite count
+- [x] `low_confidence` red warning banner on drafts that failed both rewrite attempts
+- [x] "✓ Approve & Send" button — triggers immediate SMTP send (not just mark approved)
+- [x] `api/models/email.py` — `EmailDraftResponse` now includes `critic_score`, `low_confidence`, `rewrite_count`
 - [ ] "Approve All" bulk action
-- [ ] `src/pages/EmailReview.jsx` updated
 
 ---
 
@@ -872,7 +921,8 @@ End-to-end verification that everything works together.
 | **B** | **Agentic Scout: LLM query planning + deduplication + quality loop** | ✅ Complete |
 | **B+** | **Scout enhancements: intent signals, news scout, save-count fix, location filter** | ✅ Complete |
 | **Chat** | **LLM intent extraction + history context + confidence gating + observe→ask→act** | ✅ Complete |
-| **C** | **Agentic Writer + Critic loop + SMTP send + human-in-loop email** | 🔄 In Progress |
+| **C** | **Agentic Writer + Critic loop + SMTP send + human-in-loop email** | ✅ Complete |
+| **C-fix** | **UI fixes: LeadDetail fields, Leads page approve, pending analysis, enrichment trigger** | ✅ Complete |
 | **C+** | **SerpAPI news/press release source + signal scoring boost in Analyst** | 🔲 Planned |
 | 4 | Outreach + Tracker + auto email notifications | 🔲 Not started |
 | 5 | Airflow scheduled runs with approval pauses | 🔲 Not started |
@@ -881,7 +931,7 @@ End-to-end verification that everything works together.
 
 ---
 
-## Current State (as of 2026-03-22 — Session 3)
+## Current State (as of 2026-03-22 — Session 4)
 
 **Running services:**
 - Frontend: http://localhost:3000 (React via nginx)
@@ -924,6 +974,58 @@ End-to-end verification that everything works together.
 | Approve/reject leads | ✅ Working |
 | Full pipeline: Scout → Analyst → Writer | ✅ Working |
 | Email drafting + review page | ✅ Working |
+| Email review: Critic score badge + low_confidence warning | ✅ Working |
+| Email approval: triggers immediate SMTP send | ✅ Working |
+| Enrichment bulk trigger: "👤 Enrich Contacts" button in Pipeline page | ✅ Working |
+| Enrichment per-company: "👤 Find Contacts" button in LeadDetail page | ✅ Working |
+| LeadDetail: Financial Estimates panel (utility/telecom spend, savings range) | ✅ Working |
+| LeadDetail: Score Factors panel (Recovery Potential, Industry Fit, Multi-site, Data Quality) | ✅ Working |
+| Leads page: Approve button visible for all unscored+unapproved leads (not just high tier) | ✅ Working |
+| Leads page: Pending Analysis banner — companies with status=new shown as "awaiting analysis" | ✅ Working |
+| Leads page: /leads/:companyId route registered (was missing, caused blank page) | ✅ Working |
+| API: LeadResponse includes estimated_annual_utility_spend, telecom_spend, industry_fit_score, data_quality_score, multi_site_confirmed | ✅ Working |
+| API: LeadListResponse includes pending_analysis_count | ✅ Working |
+| Enrichment: website scraper fallback (BeautifulSoup mailto: + body email extract, /contact /about /team pages) | ✅ Working |
+| Enrichment: waterfall chain — Hunter → Apollo → website scraper, stops at first hit | ✅ Working |
+| Enrichment: contact_found + status='enriched' set on company after contacts saved | ✅ Working |
+| Enrichment: Pipeline page polls trigger status, shows result banner (X contacts found / failed) | ✅ Working |
+| Contact strategy: phone column added to companies table (migration 016) | ✅ Working |
+| Contact strategy: Scout saves phone when found from Google Maps / Yelp / directories | ✅ Working |
+| Contact strategy: phone shown in Leads table (clickable tel: link) + LeadDetail header | ✅ Working |
+| Contact strategy: phone + city + website included in CSV export | ✅ Working |
+| API: LeadResponse includes city, phone, website fields | ✅ Working |
+
+---
+
+### Contact Strategy — Why Only 2/59 Companies Got Contacts (2026-03-23)
+
+Hunter free plan (50 searches/month) and Apollo people-search (paid-only) have almost no data
+for small local SMBs (healthcare staffing, manufacturing shops, medical offices in Buffalo/Rochester).
+
+**Waterfall enrichment order (implemented):**
+1. Hunter domain-search — works for mid-large companies with public email patterns
+2. Apollo people-search — requires paid plan ($49/mo), currently 403s on free tier
+3. Website scraper (free) — fetches /contact, /about, /team pages, extracts mailto: links
+
+**Enrichment steps completed:**
+- Step 1: Phone column + website scraper + backfill trigger (✅ 2026-03-23)
+- Step 2: Email pattern inference — detect pattern from scraped emails (tdepew@ → first_initial+lastname), find exec name on contact page, guess email, verify with Hunter verifier (✅ 2026-03-23)
+  - `_detect_email_pattern()` — detects first_initial_lastname / firstname.lastname / firstname_lastname
+  - `_apply_pattern()` — generates guessed email from name + pattern + domain
+  - `verify_email_hunter()` — Hunter email verifier endpoint (free, 100/month, no search credit used)
+  - `_guess_executive_email()` — finds exec name on contact/about pages via regex, generates + verifies guess
+  - `scrape_phone_from_website()` — extracts phone from tel: links + regex on homepage
+  - `/trigger/backfill-phones` — one-time endpoint to fill phones for all 69 companies with websites
+  - Pipeline page: "📞 Backfill Phones" button with polling result banner
+
+**Next enrichment steps (planned):**
+- Step 3: SerpAPI name search — Google "{company} owner OR CFO OR president" to find the decision-maker name, apply pattern
+- Step 4: LinkedIn company URL — constructed from name, shown in UI for manual lookup
+
+**Best outreach for SMBs:**
+- Phone call list (already implemented) — small local businesses answer phones; phone numbers from Scout (Yellow Pages, Google Maps)
+- Website email scraper — works where businesses list emails on contact pages
+- Manual entry via "Add Contact" button in LeadDetail for high-value targets
 
 ---
 
@@ -933,19 +1035,13 @@ End-to-end verification that everything works together.
 |---|---|---|
 | **Scout** | LLM query planner · multi-variant API calls · LLM dedup · quality retry · news intent signals | ✅ Live |
 | **Analyst** | LLM industry inference · data gap detection · re-enrichment loop · score narration | ✅ Live |
-| **Writer** | Template + LLM polish (Critic loop not yet built) | 🔄 Phase C |
+| **Writer** | Context-driven generation · Critic loop (rewrite up to 2x) · low_confidence flag · SMTP send on approval | ✅ Live |
+| **Enrichment** | Tool use: Hunter → Apollo → website scraper (waterfall) · domain guard · name-only Apollo fallback · skip generic emails · bulk + per-company trigger · result polling banner | ✅ Live |
 | **Chat** | LLM intent extraction · history context · confidence gating · observe→ask→act | ✅ Live |
 
 ---
 
 **Next to build:**
-
-**Phase C — Agentic Writer + Critic Loop** (`docs/PHASE_C_WRITER_CRITIC.md`)
-1. DB migration — add `critic_score`, `low_confidence`, `rewrite_count` to email_drafts
-2. `agents/writer/critic_agent.py` — new Critic LLM with 5-criteria rubric
-3. Update `agents/writer/writer_agent.py` — context reasoning + rewrite loop + no-contact fallback
-4. Wire SMTP send in `api/routes/emails.py`
-5. Update `EmailReview.jsx` — critic score badge + low_confidence warning
 
 **Phase C+ — SerpAPI Intent Source** (`docs/SCOUT_SOURCES_AND_SIGNALS.md`)
 1. `agents/scout/serp_client.py` — Google News + press release search

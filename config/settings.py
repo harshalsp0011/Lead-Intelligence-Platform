@@ -50,6 +50,7 @@ class Settings:
     SEARCH_PROVIDER: str = os.getenv("SEARCH_PROVIDER", "tavily")
     TAVILY_API_KEY: str = os.getenv("TAVILY_API_KEY", "")
     SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "")
+    SERPAPI_API_KEY: str = os.getenv("SERPAPI_API_KEY", "")
 
     # ------------------------------------------------------------------ #
     # SCRAPING
@@ -82,7 +83,11 @@ class Settings:
     # ------------------------------------------------------------------ #
     ENRICHMENT_PROVIDER: str = os.getenv("ENRICHMENT_PROVIDER", "hunter")
     HUNTER_API_KEY: str = os.getenv("HUNTER_API_KEY", "")
+    ZEROBOUNCE_API_KEY: str = os.getenv("ZEROBOUNCE_API_KEY", "")
     APOLLO_API_KEY: str = os.getenv("APOLLO_API_KEY", "")
+    SNOV_CLIENT_ID: str = os.getenv("SNOV_CLIENT_ID", "")
+    SNOV_CLIENT_SECRET: str = os.getenv("SNOV_CLIENT_SECRET", "")
+    PROSPEO_API_KEY: str = os.getenv("PROSPEO_API_KEY", "")
 
 
     # ------------------------------------------------------------------ #

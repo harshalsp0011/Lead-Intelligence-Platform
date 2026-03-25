@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router
 
 import Chat from './pages/Chat';
 import Leads from './pages/Leads';
+import LeadDetail from './pages/LeadDetail';
 import ScoutLive from './pages/ScoutLive';
 import EmailReview from './pages/EmailReview';
 import Pipeline from './pages/Pipeline';
@@ -81,6 +82,7 @@ export default function App() {
           <Route path="/chat"     element={<Chat />} />
           <Route path="/scout"    element={<ScoutLive />} />
           <Route path="/leads"    element={<Leads />} />
+          <Route path="/leads/:companyId" element={<LeadDetail />} />
           <Route path="/emails"   element={<EmailReview />} />
           <Route path="/triggers" element={<Triggers />} />
           <Route path="/pipeline" element={<Pipeline />} />

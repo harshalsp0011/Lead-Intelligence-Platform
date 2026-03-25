@@ -139,6 +139,101 @@ def send_lead_approval_request(
     return _send_via_sendgrid(recipient_email, subject, html_body)
 
 
+def send_draft_approval_request(
+    drafts: list[dict[str, Any]],
+    run_id: str,
+    recipient_email: str,
+    dashboard_url: str = "http://localhost:3000/emails",
+) -> bool:
+    """Send an approval request email listing AI-written email drafts.
+
+    Called after Writer finishes generating drafts. The reviewer clicks the
+    link to open the Email Review page, read each draft, and approve or reject.
+    No outreach email is sent until the reviewer approves a draft.
+
+    Args:
+        drafts: List of dicts with company_name, contact_name, subject_line, angle fields
+        run_id: Writer AgentRun UUID (for reference)
+        recipient_email: Email address of the reviewer
+        dashboard_url: URL of the Email Review page
+
+    Returns:
+        True if notification was sent successfully
+    """
+    rows_html = ""
+    for draft in drafts[:25]:  # cap at 25 rows to keep email readable
+        company = draft.get("company_name", "—")
+        contact = draft.get("contact_name", "—")
+        subject = draft.get("subject_line", "—")
+        angle = draft.get("angle", "—").replace("_", " ").title()
+        critic = draft.get("critic_score")
+        critic_str = f"{critic:.1f}/10" if critic is not None else "—"
+        critic_color = "#16a34a" if critic and critic >= 7 else "#ca8a04"
+        rows_html += f"""
+        <tr>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb">{company}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb">{contact}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;font-style:italic">{subject}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;color:#6b7280;font-size:12px">{angle}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;
+              color:{critic_color};font-weight:bold">{critic_str}</td>
+        </tr>"""
+
+    low_conf_count = sum(1 for d in drafts if d.get("low_confidence"))
+    low_conf_note = ""
+    if low_conf_count > 0:
+        low_conf_note = (
+            f'<p style="color:#b45309;background:#fef3c7;padding:10px;border-radius:4px">'
+            f"⚠ {low_conf_count} draft(s) scored below 7/10 after rewrites — "
+            f"review these carefully before approving.</p>"
+        )
+
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:750px;margin:0 auto">
+      <h2 style="color:#1e40af">Troy &amp; Banks — Email Drafts Ready for Review</h2>
+      <p>The Writer agent has finished generating personalised outreach emails.
+         <strong>No emails have been sent yet.</strong> Review each draft below,
+         then approve or reject on the dashboard.</p>
+
+      <div style="background:#f0f9ff;border-left:4px solid #3b82f6;padding:16px;margin:20px 0">
+        <strong>Run ID:</strong> {run_id}<br>
+        <strong>Drafts ready:</strong> {len(drafts)}
+      </div>
+
+      {low_conf_note}
+
+      <h3>Draft Summary</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:14px">
+        <thead>
+          <tr style="background:#f3f4f6">
+            <th style="padding:8px;text-align:left">Company</th>
+            <th style="padding:8px;text-align:left">Contact</th>
+            <th style="padding:8px;text-align:left">Subject Line</th>
+            <th style="padding:8px;text-align:left">Angle</th>
+            <th style="padding:8px;text-align:center">AI Score</th>
+          </tr>
+        </thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+
+      <div style="margin:30px 0;text-align:center">
+        <a href="{dashboard_url}" style="background:#2563eb;color:white;padding:12px 28px;
+           border-radius:6px;text-decoration:none;font-weight:bold;font-size:16px">
+          Review &amp; Approve Drafts →
+        </a>
+      </div>
+
+      <p style="color:#6b7280;font-size:12px">
+        Approve a draft to send the email immediately. Reject a draft to delete it —
+        you can regenerate a fresh version from the dashboard.
+      </p>
+    </div>
+    """
+
+    subject = f"[Troy & Banks] {len(drafts)} Email Draft(s) Ready for Your Review"
+    return _send_via_sendgrid(recipient_email, subject, html_body)
+
+
 def send_reply_alert(
     company_name: str,
     contact_name: str,
