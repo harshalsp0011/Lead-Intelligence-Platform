@@ -321,6 +321,36 @@ class EmailDraft(Base):
     rewrite_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
 
 
+class CompanyContextNote(Base):
+    """ORM mapping for the company_context_notes table.
+
+    Stores manually entered meeting context for CRM-sourced companies.
+    Used by the CRM writer path as a substitute for lead_scores.score_reason
+    when company_features / lead_scores are not available.
+
+    notes_raw       : original free-text entered by the user
+    notes_formatted : LLM-structured bullet points — used by the Writer + Critic
+    source          : always 'manual_input' — distinguishes from pipeline-derived data
+    """
+
+    __tablename__ = "company_context_notes"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    notes_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes_formatted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(50), nullable=False, default="manual_input")
+    created_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class OutreachEvent(Base):
     """ORM mapping for the outreach_events table."""
 

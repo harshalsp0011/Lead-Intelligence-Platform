@@ -97,6 +97,14 @@
 
 ---
 
+## In Planning
+
+| Feature | Plan Doc | Status |
+|---|---|---|
+| CRM Leads Email Flow — new tab on Email Review + CRM writer path + context storage | `docs/CRM_LEADS_EMAIL_PLAN.md` | Planned — not started |
+
+---
+
 ## What Is Not Built
 
 ### Reply Detection via CRM
