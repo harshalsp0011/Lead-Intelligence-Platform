@@ -62,7 +62,7 @@
 | Scout — LLM deduplication | ✅ Built | Domain match + LLM near-duplicate name review |
 | Scout — source performance learning | ✅ Built | Writes quality scores to source_performance |
 | Analyst — LLM inspector | ✅ Built | Industry inference, data gap detection, re-enrichment |
-| Analyst — contact enrichment waterfall | ✅ Built | 8 sources: Hunter → Apollo → scraper → Serper → Snov → Prospeo → ZeroBounce → permutation |
+| Analyst — contact enrichment waterfall | ✅ Built | 8 sources: Hunter → Apollo → scraper → Serper → Snov → Prospeo → ZeroBounce → permutation. Verified-only save gate: unverified emails discarded (generic_inbox excepted) |
 | Analyst — spend + savings calc | ✅ Built | Deterministic: industry_benchmarks.json × state rate |
 | Analyst — score formula | ✅ Built | `(Recovery×0.40) + (Industry×0.25) + (Multisite×0.20) + (DataQuality×0.15)` |
 | Writer — context-aware generation | ✅ Built | LLM reasons about angle before writing, no static templates |

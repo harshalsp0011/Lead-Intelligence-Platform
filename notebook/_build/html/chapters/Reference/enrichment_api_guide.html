@@ -357,11 +357,12 @@ document.write(`
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#email-verification">Email Verification</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hunter-email-verifier">Hunter Email Verifier</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#zerobounce-validate">ZeroBounce Validate</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#verification-priority-when-credits-are-available">Verification Priority (when credits are available)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#verification-priority">Verification Priority</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#phone-enrichment-separate-from-email">Phone Enrichment (separate from email)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#api-keys-summary">API Keys Summary</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#signalhire-why-not-in-the-waterfall">SignalHire — Why Not in the Waterfall</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-we-built-to-ensure-email-accuracy">What We Built to Ensure Email Accuracy</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#graceful-waterfall-no-crashes">1. Graceful Waterfall (no crashes)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#provider-skip-flags">2. Provider Skip Flags</a></li>
@@ -369,7 +370,7 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#domain-integrity-check">4. Domain Integrity Check</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pattern-permutation-with-self-verification">5. 8-Pattern Permutation with Self-Verification</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#verified-first-outreach-priority">6. Verified-First Outreach Priority</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prioritised-verification">7. Prioritised Verification</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#verified-only-save-gate">7. Verified-Only Save Gate</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#session-summary-what-was-built-2026-03-24">Session Summary — What Was Built (2026-03-24)</a><ul class="nav section-nav flex-column">
@@ -377,7 +378,7 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-was-added">What Was Added</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-db-state-2026-03-24">Current DB State (2026-03-24)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-db-state-2026-04-03">Current DB State (2026-04-03)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-to-do-next-in-order">What To Do Next (in order)</a></li>
 </ul>
             </nav>
@@ -392,7 +393,7 @@ document.write(`
                   
   <section class="tex2jax_ignore mathjax_ignore" id="contact-enrichment-api-guide-strategy">
 <h1>Contact Enrichment — API Guide &amp; Strategy<a class="headerlink" href="#contact-enrichment-api-guide-strategy" title="Permalink to this heading">#</a></h1>
-<p><strong>Last updated:</strong> 2026-03-24
+<p><strong>Last updated:</strong> 2026-04-03
 <strong>Purpose:</strong> Document every API integrated into the enrichment waterfall, its status,
 free-tier limits, what it finds, and why it is or isn’t working right now.</p>
 <hr class="docutils" />
@@ -406,13 +407,13 @@ free-tier limits, what it finds, and why it is or isn’t working right now.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>Total contacts in DB</p></td>
-<td><p>80</p></td>
+<td><p>9</p></td>
 </tr>
 <tr class="row-odd"><td><p>Verified (SMTP-confirmed)</p></td>
-<td><p>3</p></td>
+<td><p>9</p></td>
 </tr>
-<tr class="row-even"><td><p>Unverified (found but unconfirmed)</p></td>
-<td><p>77</p></td>
+<tr class="row-even"><td><p>Unverified</p></td>
+<td><p>0 — unverified contacts are no longer saved</p></td>
 </tr>
 <tr class="row-odd"><td><p>Source of all contacts</p></td>
 <td><p>Hunter (domain search ran before quota hit)</p></td>
@@ -420,6 +421,13 @@ free-tier limits, what it finds, and why it is or isn’t working right now.</p>
 </tbody>
 </table>
 </div>
+<blockquote>
+<div><p><strong>2026-04-03 cleanup:</strong> 82 unverified Hunter contacts deleted. 23 email drafts written against
+those contacts deleted. 23 companies reset from <code class="docutils literal notranslate"><span class="pre">draft_created</span></code> → <code class="docutils literal notranslate"><span class="pre">approved</span></code> for re-enrichment.
+Going forward, enrichment only saves contacts with a confirmed deliverable email.
+Exception: <code class="docutils literal notranslate"><span class="pre">generic_inbox</span></code> (<code class="docutils literal notranslate"><span class="pre">info&#64;</span></code>, <code class="docutils literal notranslate"><span class="pre">contact&#64;</span></code>) are allowed unverified — they are real
+addresses at live domains, just not personal inboxes.</p>
+</div></blockquote>
 </section>
 <hr class="docutils" />
 <section id="what-enrichment-does">
@@ -430,12 +438,14 @@ avoids redundant calls.</p>
 <section id="quality-gates-applied-before-saving">
 <h3>Quality Gates Applied Before Saving<a class="headerlink" href="#quality-gates-applied-before-saving" title="Permalink to this heading">#</a></h3>
 <ol class="arabic simple">
+<li><p><strong>Verified-only gate</strong> — contacts are only saved if <code class="docutils literal notranslate"><span class="pre">verified=True</span></code> (SMTP-confirmed deliverable).
+Unverified emails are dropped — no point generating or sending to addresses that may not exist.
+Exception: <code class="docutils literal notranslate"><span class="pre">generic_inbox</span></code> source (<code class="docutils literal notranslate"><span class="pre">info&#64;</span></code>, <code class="docutils literal notranslate"><span class="pre">contact&#64;</span></code>) is allowed through — these are real
+addresses at live domains; they are just not personal inboxes.</p></li>
 <li><p><strong>Placeholder filter</strong> — rejects <code class="docutils literal notranslate"><span class="pre">firstname&#64;</span></code>, <code class="docutils literal notranslate"><span class="pre">lastname&#64;</span></code>, <code class="docutils literal notranslate"><span class="pre">last&#64;</span></code>, <code class="docutils literal notranslate"><span class="pre">flast&#64;</span></code> etc.
 (Hunter sometimes returns these as unverified guesses)</p></li>
 <li><p><strong>Domain integrity check</strong> — rejects emails where the domain contains CSS class names
 or spaces (scraping artifacts like <code class="docutils literal notranslate"><span class="pre">email&#64;domain.com--skip-themes</span></code>)</p></li>
-<li><p><strong>Generic inbox fallback</strong> — <code class="docutils literal notranslate"><span class="pre">info&#64;</span></code>, <code class="docutils literal notranslate"><span class="pre">contact&#64;</span></code> etc. are only saved as last resort,
-never wasted on verification credits</p></li>
 </ol>
 </section>
 </section>
@@ -559,8 +569,8 @@ Resets on next billing cycle.</p></li>
 <li><p>Verifies each with Hunter verifier (free, no search credit) or ZeroBounce</p></li>
 </ol>
 </li>
-<li><p><strong>Current status:</strong> ✅ <strong>Working</strong> (Google search works; verification exhausted but
-unverified guesses still saved with <code class="docutils literal notranslate"><span class="pre">verified=False</span></code>)</p></li>
+<li><p><strong>Current status:</strong> ✅ <strong>Working</strong> (Google search works; if ZeroBounce credits are
+exhausted no contact is saved — unverified guesses are discarded)</p></li>
 <li><p><strong>Uses:</strong> <code class="docutils literal notranslate"><span class="pre">SERPER_API_KEY</span></code> / <code class="docutils literal notranslate"><span class="pre">SERPAPI_API_KEY</span></code> for search, <code class="docutils literal notranslate"><span class="pre">HUNTER_API_KEY</span></code> for verify</p></li>
 </ul>
 </section>
@@ -600,9 +610,10 @@ so the writer can generate an email and the sales rep can at least try</p></li>
 but is still worth sending to — common in SMBs</p></li>
 </ul>
 </section>
-<section id="verification-priority-when-credits-are-available">
-<h3>Verification Priority (when credits are available)<a class="headerlink" href="#verification-priority-when-credits-are-available" title="Permalink to this heading">#</a></h3>
-<p>The <code class="docutils literal notranslate"><span class="pre">trigger_verify_emails</span></code> endpoint sorts unverified contacts before verifying:</p>
+<section id="verification-priority">
+<h3>Verification Priority<a class="headerlink" href="#verification-priority" title="Permalink to this heading">#</a></h3>
+<p>Contacts are only saved if verified. The <code class="docutils literal notranslate"><span class="pre">trigger_verify_emails</span></code> endpoint can be used
+to re-verify existing contacts (e.g. after ZeroBounce credits reset):</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Priority</p></th>
@@ -629,7 +640,7 @@ but is still worth sending to — common in SMBs</p></li>
 </tr>
 <tr class="row-even"><td><p>Skipped</p></td>
 <td><p>Generic inbox</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">info&#64;</span></code>, <code class="docutils literal notranslate"><span class="pre">contact&#64;</span></code>, <code class="docutils literal notranslate"><span class="pre">hello&#64;</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">info&#64;</span></code>, <code class="docutils literal notranslate"><span class="pre">contact&#64;</span></code>, <code class="docutils literal notranslate"><span class="pre">hello&#64;</span></code> — already in DB, no credits wasted</p></td>
 </tr>
 </tbody>
 </table>
@@ -716,12 +727,17 @@ but is still worth sending to — common in SMBs</p></li>
 <td><p>Email validate + domain format</p></td>
 <td><p>❌ 0 credits (resets monthly)</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">GOOGLE_MAPS_API_KEY</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SIGNALHIRE_API_KEY</span></code></p></td>
+<td><p><a class="reference external" href="http://SignalHire.com">SignalHire.com</a></p></td>
+<td><p>Person lookup (email + phone)</p></td>
+<td><p>⚠️ 5 credits/month — manual use only (see below)</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">GOOGLE_MAPS_API_KEY</span></code></p></td>
 <td><p>Google Places</p></td>
 <td><p>Phone lookup</p></td>
 <td><p>✅ Working</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">YELP_API_KEY</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">YELP_API_KEY</span></code></p></td>
 <td><p>Yelp Fusion</p></td>
 <td><p>Phone lookup fallback</p></td>
 <td><p>✅ Working</p></td>
@@ -729,6 +745,29 @@ but is still worth sending to — common in SMBs</p></li>
 </tbody>
 </table>
 </div>
+</section>
+<hr class="docutils" />
+<section id="signalhire-why-not-in-the-waterfall">
+<h2>SignalHire — Why Not in the Waterfall<a class="headerlink" href="#signalhire-why-not-in-the-waterfall" title="Permalink to this heading">#</a></h2>
+<p>SignalHire returns verified emails + personal phone numbers by person (LinkedIn URL, name, or email).
+It is <strong>not integrated into the enrichment waterfall</strong> for two reasons:</p>
+<ol class="arabic simple">
+<li><p><strong>Async API</strong> — does not return data inline. Results are POSTed back to a callback webhook URL,
+which requires a dedicated receiver endpoint and request-to-company matching logic.</p></li>
+<li><p><strong>5 credits/month free</strong> — too few to run automatically on every company.</p></li>
+</ol>
+<p><strong>When to use it manually:</strong></p>
+<ul class="simple">
+<li><p>A HIGH-tier lead has no verified contact after Prospeo quota is exhausted</p></li>
+<li><p>Go to <a class="reference external" href="https://www.signalhire.com">signalhire.com</a>, search by company name, pull the CFO email</p></li>
+<li><p>Add the contact via the “Add Contact” button in LeadDetail</p></li>
+</ul>
+<p><strong>Future integration (if upgraded to paid plan):</strong></p>
+<ul class="simple">
+<li><p>Add <code class="docutils literal notranslate"><span class="pre">POST</span> <span class="pre">/webhooks/signalhire</span></code> receiver endpoint</p></li>
+<li><p>Insert as Step 6.6 in waterfall (between Prospeo and ZeroBounce domain format)</p></li>
+<li><p>Key in <code class="docutils literal notranslate"><span class="pre">.env</span></code>: <code class="docutils literal notranslate"><span class="pre">SIGNALHIRE_API_KEY</span></code></p></li>
+</ul>
 </section>
 <hr class="docutils" />
 <section id="what-we-built-to-ensure-email-accuracy">
@@ -767,10 +806,11 @@ verified hits.</p>
 <p><code class="docutils literal notranslate"><span class="pre">get_priority_contact()</span></code> returns contacts ordered: verified first, then by title
 seniority (CFO &gt; VP &gt; Director &gt; Owner &gt; generic). Writer and outreach agents use this.</p>
 </section>
-<section id="prioritised-verification">
-<h3>7. Prioritised Verification<a class="headerlink" href="#prioritised-verification" title="Permalink to this heading">#</a></h3>
-<p>When running Verify Emails, contacts are sorted by value before verification credits
-are spent — named executives first, generic inboxes never verified (waste of credits).</p>
+<section id="verified-only-save-gate">
+<h3>7. Verified-Only Save Gate<a class="headerlink" href="#verified-only-save-gate" title="Permalink to this heading">#</a></h3>
+<p>The final filter before any contact is persisted: if <code class="docutils literal notranslate"><span class="pre">verified=False</span></code> and <code class="docutils literal notranslate"><span class="pre">source</span> <span class="pre">!=</span> <span class="pre">'generic_inbox'</span></code>
+the contact is discarded entirely. This means no phantom email addresses reach the writer or
+outreach sender. Credits are only spent on leads that can actually receive the email.</p>
 </section>
 </section>
 <hr class="docutils" />
@@ -814,8 +854,8 @@ are spent — named executives first, generic inboxes never verified (waste of c
 </ul>
 </section>
 </section>
-<section id="current-db-state-2026-03-24">
-<h2>Current DB State (2026-03-24)<a class="headerlink" href="#current-db-state-2026-03-24" title="Permalink to this heading">#</a></h2>
+<section id="current-db-state-2026-04-03">
+<h2>Current DB State (2026-04-03)<a class="headerlink" href="#current-db-state-2026-04-03" title="Permalink to this heading">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Metric</p></th>
@@ -826,23 +866,23 @@ are spent — named executives first, generic inboxes never verified (waste of c
 <tr class="row-even"><td><p>Total companies</p></td>
 <td><p>103</p></td>
 </tr>
-<tr class="row-odd"><td><p>Approved (has contact)</p></td>
-<td><p>35</p></td>
+<tr class="row-odd"><td><p>Approved (has verified contact)</p></td>
+<td><p>~9</p></td>
 </tr>
-<tr class="row-even"><td><p>Scored, awaiting human review</p></td>
-<td><p>21</p></td>
+<tr class="row-even"><td><p>Reset to approved (awaiting re-enrichment)</p></td>
+<td><p>23</p></td>
 </tr>
-<tr class="row-odd"><td><p>New, not yet scored</p></td>
-<td><p>44</p></td>
+<tr class="row-odd"><td><p>Scored, awaiting human review</p></td>
+<td><p>~21</p></td>
 </tr>
 <tr class="row-even"><td><p>Total contacts</p></td>
-<td><p>~80+</p></td>
+<td><p>9</p></td>
 </tr>
 <tr class="row-odd"><td><p>Verified contacts</p></td>
-<td><p>3</p></td>
+<td><p>9</p></td>
 </tr>
 <tr class="row-even"><td><p>Unverified contacts</p></td>
-<td><p>~77</p></td>
+<td><p>0</p></td>
 </tr>
 <tr class="row-odd"><td><p>Prospeo credits remaining</p></td>
 <td><p>~98</p></td>
@@ -856,13 +896,18 @@ are spent — named executives first, generic inboxes never verified (waste of c
 </tbody>
 </table>
 </div>
+<blockquote>
+<div><p><strong>Why so few contacts:</strong> 82 unverified Hunter contacts were deleted on 2026-04-03.
+Enrichment now only keeps SMTP-confirmed emails. Re-run enrichment next month when
+Hunter + ZeroBounce quotas reset to rebuild the contact list with verified emails only.</p>
+</div></blockquote>
 </section>
 <section id="what-to-do-next-in-order">
 <h2>What To Do Next (in order)<a class="headerlink" href="#what-to-do-next-in-order" title="Permalink to this heading">#</a></h2>
 <ol class="arabic simple">
-<li><p><strong>Run Writer</strong> — 35 approved companies have contacts, ready for email draft generation.</p></li>
-<li><p><strong>Next month:</strong> Run Verify Emails as soon as ZeroBounce resets (100 credits covers all ~77 unverified).</p></li>
-<li><p><strong>Next month:</strong> Run Enrich Contacts — Hunter domain search (50/month) will find named contacts for the 3 companies that only got <code class="docutils literal notranslate"><span class="pre">info&#64;</span></code>.</p></li>
+<li><p><strong>Next month when quotas reset:</strong> Run Enrich Contacts — Hunter (50 searches) + ZeroBounce (100 verifications) will rebuild verified contact list for the 23 reset companies.</p></li>
+<li><p><strong>Run Writer</strong> — the 9 companies with verified contacts are ready for email draft generation now.</p></li>
+<li><p><strong>Prospeo</strong> — 98 credits available. Can run immediately for the 23 companies without contacts (LinkedIn-sourced, SMTP-verified).</p></li>
 </ol>
 </section>
 </section>
@@ -951,11 +996,12 @@ are spent — named executives first, generic inboxes never verified (waste of c
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#email-verification">Email Verification</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hunter-email-verifier">Hunter Email Verifier</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#zerobounce-validate">ZeroBounce Validate</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#verification-priority-when-credits-are-available">Verification Priority (when credits are available)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#verification-priority">Verification Priority</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#phone-enrichment-separate-from-email">Phone Enrichment (separate from email)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#api-keys-summary">API Keys Summary</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#signalhire-why-not-in-the-waterfall">SignalHire — Why Not in the Waterfall</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-we-built-to-ensure-email-accuracy">What We Built to Ensure Email Accuracy</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#graceful-waterfall-no-crashes">1. Graceful Waterfall (no crashes)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#provider-skip-flags">2. Provider Skip Flags</a></li>
@@ -963,7 +1009,7 @@ are spent — named executives first, generic inboxes never verified (waste of c
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#domain-integrity-check">4. Domain Integrity Check</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pattern-permutation-with-self-verification">5. 8-Pattern Permutation with Self-Verification</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#verified-first-outreach-priority">6. Verified-First Outreach Priority</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prioritised-verification">7. Prioritised Verification</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#verified-only-save-gate">7. Verified-Only Save Gate</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#session-summary-what-was-built-2026-03-24">Session Summary — What Was Built (2026-03-24)</a><ul class="nav section-nav flex-column">
@@ -971,7 +1017,7 @@ are spent — named executives first, generic inboxes never verified (waste of c
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-was-added">What Was Added</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-db-state-2026-03-24">Current DB State (2026-03-24)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-db-state-2026-04-03">Current DB State (2026-04-03)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-to-do-next-in-order">What To Do Next (in order)</a></li>
 </ul>
   </nav></div>

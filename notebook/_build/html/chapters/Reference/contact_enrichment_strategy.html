@@ -353,6 +353,7 @@ document.write(`
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#database-where-contact-data-lives">Database: Where Contact Data Lives</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#steps-completed-vs-planned">Steps Completed vs Planned</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-to-expect-realistic-coverage">What to Expect (Realistic Coverage)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#verified-only-save-policy-2026-04-03">Verified-Only Save Policy (2026-04-03)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agentic-concepts-used">Agentic Concepts Used</a></li>
 </ul>
 </li>
@@ -373,7 +374,7 @@ document.write(`
 </section>
 <section class="tex2jax_ignore mathjax_ignore" id="utility-lead-platform-contact-finding-architecture">
 <h1>Utility Lead Platform — Contact Finding Architecture<a class="headerlink" href="#utility-lead-platform-contact-finding-architecture" title="Permalink to this heading">#</a></h1>
-<p>Last updated: 2026-03-23</p>
+<p>Last updated: 2026-04-03</p>
 <hr class="docutils" />
 <section id="why-contact-finding-is-hard-for-smbs">
 <h2>Why Contact Finding Is Hard for SMBs<a class="headerlink" href="#why-contact-finding-is-hard-for-smbs" title="Permalink to this heading">#</a></h2>
@@ -481,7 +482,7 @@ and can be targeted manually via the “Add Contact” button in LeadDetail.</p>
   │   Query: &quot;{company} CFO OR owner OR president OR CEO&quot;      │
   │   Parses organic results + snippets for &quot;Name, Title&quot;      │
   │   Applies all 3 email patterns → verifies each with Hunter │
-  │   Saves on first verified hit; saves unverified if no key  │
+  │   Only saves if verification passes — discards otherwise   │
   │   Cost: 1 Serper credit (2,500 free/month)                 │
   └─────────────────────────────────────────────────────────────┘
            │ found + verified? → SAVE as serper contact
@@ -735,6 +736,16 @@ contacts
 The phone scraper (Step 1) is the highest-coverage tool in the stack.</p>
 </section>
 <hr class="docutils" />
+<section id="verified-only-save-policy-2026-04-03">
+<h2>Verified-Only Save Policy (2026-04-03)<a class="headerlink" href="#verified-only-save-policy-2026-04-03" title="Permalink to this heading">#</a></h2>
+<p>Contacts are only persisted if the email is SMTP-confirmed deliverable (<code class="docutils literal notranslate"><span class="pre">verified=True</span></code>).</p>
+<ul class="simple">
+<li><p>If verification fails or quotas are exhausted → contact is <strong>discarded</strong>, waterfall continues to next step</p></li>
+<li><p>Exception: <code class="docutils literal notranslate"><span class="pre">generic_inbox</span></code> source (<code class="docutils literal notranslate"><span class="pre">info&#64;company.com</span></code>) — allowed through unverified. These are real addresses at live domains, just not personal inboxes. They serve as a last resort so the company stays workable.</p></li>
+<li><p><strong>Why:</strong> Sending to non-existent emails wastes writer LLM credits, SendGrid quota, and damages sender reputation. A company with no verified contact stays at <code class="docutils literal notranslate"><span class="pre">contact_found=false</span></code> and gets re-enriched next month when API quotas reset.</p></li>
+</ul>
+</section>
+<hr class="docutils" />
 <section id="agentic-concepts-used">
 <h2>Agentic Concepts Used<a class="headerlink" href="#agentic-concepts-used" title="Permalink to this heading">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="table">
@@ -748,16 +759,16 @@ The phone scraper (Step 1) is the highest-coverage tool in the stack.</p>
 <td><p>Every external call: Hunter, Apollo, BeautifulSoup, Hunter verifier, Serper</p></td>
 </tr>
 <tr class="row-odd"><td><p><strong>Waterfall / Conditional Fallback</strong></p></td>
-<td><p>Hunter → Apollo → Website → Pattern Inference → Serper, stops at first hit</p></td>
+<td><p>Hunter → Apollo → Website → Pattern Inference → Serper, stops at first verified hit</p></td>
 </tr>
 <tr class="row-even"><td><p><strong>Pattern Inference</strong></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">_detect_email_pattern</span></code> — reasons about naming convention from observed data</p></td>
 </tr>
 <tr class="row-odd"><td><p><strong>Self-verification</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">verify_email_hunter</span></code> — agent checks its own guess before committing</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">verify_email_hunter</span></code> / <code class="docutils literal notranslate"><span class="pre">verify_email_zerobounce</span></code> — agent checks its own guess before committing</p></td>
 </tr>
 <tr class="row-even"><td><p><strong>Graceful Degradation</strong></p></td>
-<td><p>Empty domain → skip Hunter; Apollo 403 → skip; no name found → LinkedIn link fallback</p></td>
+<td><p>Empty domain → skip Hunter; Apollo 403 → skip; no name found → LinkedIn link fallback; unverified → discard</p></td>
 </tr>
 <tr class="row-odd"><td><p><strong>Observation → Action</strong></p></td>
 <td><p>Sees emails like <code class="docutils literal notranslate"><span class="pre">tdepew&#64;</span></code> → infers pattern → finds name → acts (generates guess)</p></td>
@@ -851,6 +862,7 @@ The phone scraper (Step 1) is the highest-coverage tool in the stack.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#database-where-contact-data-lives">Database: Where Contact Data Lives</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#steps-completed-vs-planned">Steps Completed vs Planned</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-to-expect-realistic-coverage">What to Expect (Realistic Coverage)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#verified-only-save-policy-2026-04-03">Verified-Only Save Policy (2026-04-03)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agentic-concepts-used">Agentic Concepts Used</a></li>
 </ul>
 </li>

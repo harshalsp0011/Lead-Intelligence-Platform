@@ -283,9 +283,9 @@ def _query_leads(
     high = sum(1 for row in rows if row.get("tier") == TIER_HIGH)
     medium = sum(1 for row in rows if row.get("tier") == TIER_MEDIUM)
     low = sum(1 for row in rows if row.get("tier") not in {TIER_HIGH, TIER_MEDIUM})
-    # Companies that have not been through the analyst yet (no lead_score row)
+    # Companies that have not been through the analyst yet (new = never touched, enriched = contacts found but not scored)
     pending_analysis = db.scalar(
-        select(func.count(Company.id)).where(Company.status == STATUS_NEW)
+        select(func.count(Company.id)).where(Company.status.in_([STATUS_NEW, "enriched"]))
     ) or 0
 
     page = max(1, filters.page)

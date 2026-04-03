@@ -1,6 +1,6 @@
 # Contact Enrichment — API Guide & Strategy
 
-**Last updated:** 2026-03-24
+**Last updated:** 2026-04-03
 **Purpose:** Document every API integrated into the enrichment waterfall, its status,
 free-tier limits, what it finds, and why it is or isn't working right now.
 
@@ -10,10 +10,16 @@ free-tier limits, what it finds, and why it is or isn't working right now.
 
 | Metric | Value |
 |---|---|
-| Total contacts in DB | 80 |
-| Verified (SMTP-confirmed) | 3 |
-| Unverified (found but unconfirmed) | 77 |
+| Total contacts in DB | 9 |
+| Verified (SMTP-confirmed) | 9 |
+| Unverified | 0 — unverified contacts are no longer saved |
 | Source of all contacts | Hunter (domain search ran before quota hit) |
+
+> **2026-04-03 cleanup:** 82 unverified Hunter contacts deleted. 23 email drafts written against
+> those contacts deleted. 23 companies reset from `draft_created` → `approved` for re-enrichment.
+> Going forward, enrichment only saves contacts with a confirmed deliverable email.
+> Exception: `generic_inbox` (`info@`, `contact@`) are allowed unverified — they are real
+> addresses at live domains, just not personal inboxes.
 
 ---
 
@@ -24,12 +30,14 @@ providers that stops as soon as one returns a result. This conserves API credits
 avoids redundant calls.
 
 ### Quality Gates Applied Before Saving
-1. **Placeholder filter** — rejects `firstname@`, `lastname@`, `last@`, `flast@` etc.
+1. **Verified-only gate** — contacts are only saved if `verified=True` (SMTP-confirmed deliverable).
+   Unverified emails are dropped — no point generating or sending to addresses that may not exist.
+   Exception: `generic_inbox` source (`info@`, `contact@`) is allowed through — these are real
+   addresses at live domains; they are just not personal inboxes.
+2. **Placeholder filter** — rejects `firstname@`, `lastname@`, `last@`, `flast@` etc.
    (Hunter sometimes returns these as unverified guesses)
-2. **Domain integrity check** — rejects emails where the domain contains CSS class names
+3. **Domain integrity check** — rejects emails where the domain contains CSS class names
    or spaces (scraping artifacts like `email@domain.com--skip-themes`)
-3. **Generic inbox fallback** — `info@`, `contact@` etc. are only saved as last resort,
-   never wasted on verification credits
 
 ---
 
@@ -131,8 +139,8 @@ Every company goes through these steps in order, stopping at first hit:
   3. Generates all 8 email patterns: `first.last`, `flast`, `firstlast`, `first`,
      `f.last`, `last`, `first_last`, `lastfirst`
   4. Verifies each with Hunter verifier (free, no search credit) or ZeroBounce
-- **Current status:** ✅ **Working** (Google search works; verification exhausted but
-  unverified guesses still saved with `verified=False`)
+- **Current status:** ✅ **Working** (Google search works; if ZeroBounce credits are
+  exhausted no contact is saved — unverified guesses are discarded)
 - **Uses:** `SERPER_API_KEY` / `SERPAPI_API_KEY` for search, `HUNTER_API_KEY` for verify
 
 ---
@@ -163,8 +171,9 @@ Every company goes through these steps in order, stopping at first hit:
 - **Note:** `catch-all` means the domain accepts all mail (can't confirm specific mailbox)
   but is still worth sending to — common in SMBs
 
-### Verification Priority (when credits are available)
-The `trigger_verify_emails` endpoint sorts unverified contacts before verifying:
+### Verification Priority
+Contacts are only saved if verified. The `trigger_verify_emails` endpoint can be used
+to re-verify existing contacts (e.g. after ZeroBounce credits reset):
 
 | Priority | Criteria | Example |
 |---|---|---|
@@ -172,7 +181,7 @@ The `trigger_verify_emails` endpoint sorts unverified contacts before verifying:
 | 2 | Named person + any title | John Smith, Manager |
 | 3 | Named person, no title | Jane Doe |
 | 4 | Personal-looking email (short, no generic prefix) | `jnotaro@csshealth.com` |
-| Skipped | Generic inbox | `info@`, `contact@`, `hello@` |
+| Skipped | Generic inbox | `info@`, `contact@`, `hello@` — already in DB, no credits wasted |
 
 ---
 
@@ -201,8 +210,30 @@ Phone waterfall per company (stops at first hit):
 | `SNOV_CLIENT_ID/SECRET` | Snov.io | Domain email search | ❌ Wrong plan |
 | `PROSPEO_API_KEY` | Prospeo.io | Search/Enrich Person | ✅ Working (100 enrich credits/month) |
 | `ZEROBOUNCE_API_KEY` | ZeroBounce.net | Email validate + domain format | ❌ 0 credits (resets monthly) |
+| `SIGNALHIRE_API_KEY` | SignalHire.com | Person lookup (email + phone) | ⚠️ 5 credits/month — manual use only (see below) |
 | `GOOGLE_MAPS_API_KEY` | Google Places | Phone lookup | ✅ Working |
 | `YELP_API_KEY` | Yelp Fusion | Phone lookup fallback | ✅ Working |
+
+---
+
+## SignalHire — Why Not in the Waterfall
+
+SignalHire returns verified emails + personal phone numbers by person (LinkedIn URL, name, or email).
+It is **not integrated into the enrichment waterfall** for two reasons:
+
+1. **Async API** — does not return data inline. Results are POSTed back to a callback webhook URL,
+   which requires a dedicated receiver endpoint and request-to-company matching logic.
+2. **5 credits/month free** — too few to run automatically on every company.
+
+**When to use it manually:**
+- A HIGH-tier lead has no verified contact after Prospeo quota is exhausted
+- Go to [signalhire.com](https://www.signalhire.com), search by company name, pull the CFO email
+- Add the contact via the "Add Contact" button in LeadDetail
+
+**Future integration (if upgraded to paid plan):**
+- Add `POST /webhooks/signalhire` receiver endpoint
+- Insert as Step 6.6 in waterfall (between Prospeo and ZeroBounce domain format)
+- Key in `.env`: `SIGNALHIRE_API_KEY`
 
 ---
 
@@ -236,9 +267,10 @@ verified hits.
 `get_priority_contact()` returns contacts ordered: verified first, then by title
 seniority (CFO > VP > Director > Owner > generic). Writer and outreach agents use this.
 
-### 7. Prioritised Verification
-When running Verify Emails, contacts are sorted by value before verification credits
-are spent — named executives first, generic inboxes never verified (waste of credits).
+### 7. Verified-Only Save Gate
+The final filter before any contact is persisted: if `verified=False` and `source != 'generic_inbox'`
+the contact is discarded entirely. This means no phantom email addresses reach the writer or
+outreach sender. Credits are only spent on leads that can actually receive the email.
 
 ---
 
@@ -272,25 +304,29 @@ are spent — named executives first, generic inboxes never verified (waste of c
 - **35 companies manually approved** — all companies with existing contacts backfilled to `status="approved"`
 - **Orchestrator auto-approves** — when enrichment finds a contact, sets `approved_human=True` on lead score
 
-## Current DB State (2026-03-24)
+## Current DB State (2026-04-03)
 
 | Metric | Value |
 |---|---|
 | Total companies | 103 |
-| Approved (has contact) | 35 |
-| Scored, awaiting human review | 21 |
-| New, not yet scored | 44 |
-| Total contacts | ~80+ |
-| Verified contacts | 3 |
-| Unverified contacts | ~77 |
+| Approved (has verified contact) | ~9 |
+| Reset to approved (awaiting re-enrichment) | 23 |
+| Scored, awaiting human review | ~21 |
+| Total contacts | 9 |
+| Verified contacts | 9 |
+| Unverified contacts | 0 |
 | Prospeo credits remaining | ~98 |
 | ZeroBounce credits remaining | 0 (resets monthly) |
 | Hunter quota remaining | 0 (resets monthly) |
 
+> **Why so few contacts:** 82 unverified Hunter contacts were deleted on 2026-04-03.
+> Enrichment now only keeps SMTP-confirmed emails. Re-run enrichment next month when
+> Hunter + ZeroBounce quotas reset to rebuild the contact list with verified emails only.
+
 ## What To Do Next (in order)
 
-1. **Run Writer** — 35 approved companies have contacts, ready for email draft generation.
+1. **Next month when quotas reset:** Run Enrich Contacts — Hunter (50 searches) + ZeroBounce (100 verifications) will rebuild verified contact list for the 23 reset companies.
 
-2. **Next month:** Run Verify Emails as soon as ZeroBounce resets (100 credits covers all ~77 unverified).
+2. **Run Writer** — the 9 companies with verified contacts are ready for email draft generation now.
 
-3. **Next month:** Run Enrich Contacts — Hunter domain search (50/month) will find named contacts for the 3 companies that only got `info@`.
+3. **Prospeo** — 98 credits available. Can run immediately for the 23 companies without contacts (LinkedIn-sourced, SMTP-verified).

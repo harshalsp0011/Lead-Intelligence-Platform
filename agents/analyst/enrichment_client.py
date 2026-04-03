@@ -228,6 +228,19 @@ def find_contacts(company_name: str, website_domain: str, db_session: Session) -
 
     saved_contacts: list[dict[str, Any]] = []
     for contact in raw_contacts:
+        # Only save contacts with a confirmed deliverable email.
+        # Exception: generic_inbox (info@, contact@) are allowed unverified —
+        # they are real addresses, just not decision-maker inboxes.
+        is_verified = bool(contact.get("verified") or False)
+        is_generic = provider == "generic_inbox"
+        if not is_verified and not is_generic:
+            logger.debug(
+                "Skipping unverified contact %s from provider=%s — not confirmed deliverable",
+                contact.get("email"),
+                provider,
+            )
+            continue
+
         try:
             contact_id = save_contact(contact_dict=contact, company_id=company_id, db_session=db_session)
         except ValueError as _ve:
@@ -242,7 +255,7 @@ def find_contacts(company_name: str, website_domain: str, db_session: Session) -
                 "email": _clean_string(contact.get("email")),
                 "linkedin_url": _clean_string(contact.get("linkedin_url")),
                 "source": provider,
-                "verified": bool(contact.get("verified") or False),
+                "verified": is_verified,
             }
         )
 

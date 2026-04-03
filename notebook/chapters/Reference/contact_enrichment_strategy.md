@@ -1,7 +1,7 @@
 # Contact Enrichment Strategy
 # Utility Lead Platform — Contact Finding Architecture
 
-Last updated: 2026-03-23
+Last updated: 2026-04-03
 
 ---
 
@@ -97,7 +97,7 @@ For each company:
   │   Query: "{company} CFO OR owner OR president OR CEO"      │
   │   Parses organic results + snippets for "Name, Title"      │
   │   Applies all 3 email patterns → verifies each with Hunter │
-  │   Saves on first verified hit; saves unverified if no key  │
+  │   Only saves if verification passes — discards otherwise   │
   │   Cost: 1 Serper credit (2,500 free/month)                 │
   └─────────────────────────────────────────────────────────────┘
            │ found + verified? → SAVE as serper contact
@@ -232,14 +232,24 @@ The phone scraper (Step 1) is the highest-coverage tool in the stack.
 
 ---
 
+## Verified-Only Save Policy (2026-04-03)
+
+Contacts are only persisted if the email is SMTP-confirmed deliverable (`verified=True`).
+
+- If verification fails or quotas are exhausted → contact is **discarded**, waterfall continues to next step
+- Exception: `generic_inbox` source (`info@company.com`) — allowed through unverified. These are real addresses at live domains, just not personal inboxes. They serve as a last resort so the company stays workable.
+- **Why:** Sending to non-existent emails wastes writer LLM credits, SendGrid quota, and damages sender reputation. A company with no verified contact stays at `contact_found=false` and gets re-enriched next month when API quotas reset.
+
+---
+
 ## Agentic Concepts Used
 
 | Concept | Where applied |
 |---|---|
 | **Tool Use** | Every external call: Hunter, Apollo, BeautifulSoup, Hunter verifier, Serper |
-| **Waterfall / Conditional Fallback** | Hunter → Apollo → Website → Pattern Inference → Serper, stops at first hit |
+| **Waterfall / Conditional Fallback** | Hunter → Apollo → Website → Pattern Inference → Serper, stops at first verified hit |
 | **Pattern Inference** | `_detect_email_pattern` — reasons about naming convention from observed data |
-| **Self-verification** | `verify_email_hunter` — agent checks its own guess before committing |
-| **Graceful Degradation** | Empty domain → skip Hunter; Apollo 403 → skip; no name found → LinkedIn link fallback |
+| **Self-verification** | `verify_email_hunter` / `verify_email_zerobounce` — agent checks its own guess before committing |
+| **Graceful Degradation** | Empty domain → skip Hunter; Apollo 403 → skip; no name found → LinkedIn link fallback; unverified → discard |
 | **Observation → Action** | Sees emails like `tdepew@` → infers pattern → finds name → acts (generates guess) |
 | **Google as a Tool** | `find_via_serper` — treats Google search as a structured tool: query → parse → extract → act |
